@@ -7,74 +7,44 @@
           <ion-list-header>
             Celilsemi Sam Erkiner
           </ion-list-header>
-        </ion-list>
-
-        <ion-list *ngIf="loggedIn" lines="none">
-          <ion-list-header>
-            Account
-          </ion-list-header>
-
           <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/account" routerLinkActive="active" routerDirection="root" detail="false">
+            <ion-item routerLink="/app/tabs/about" routerLinkActive="selected" routerDirection="root" detail="false">
               <ion-icon slot="start" name="person"></ion-icon>
               <ion-label>
-                Account
+                About
               </ion-label>
             </ion-item>
           </ion-menu-toggle>
 
           <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/support" routerLinkActive="active" routerDirection="root" detail="false">
-              <ion-icon slot="start" name="help"></ion-icon>
+            <ion-item routerLink="/app/tabs/schedule" routerLinkActive="selected" routerDirection="root" detail="false">
+              <ion-icon slot="start" name="albums"></ion-icon>
               <ion-label>
-                Support
+                Blog
               </ion-label>
             </ion-item>
           </ion-menu-toggle>
 
           <ion-menu-toggle autoHide="false">
-            <ion-item button (click)="logout()" detail="false">
-              <ion-icon slot="start" name="log-out"></ion-icon>
+            <ion-item routerLink="/app/tabs/contact" routerLinkActive="selected" routerDirection="root" detail="false">
+              <ion-icon slot="start" name="mail"></ion-icon>
               <ion-label>
-                Logout
+                Contact
               </ion-label>
             </ion-item>
           </ion-menu-toggle>
-
         </ion-list>
 
-        <ion-list *ngIf="!loggedIn" lines="none">
+        <ion-list lines="none">
           <ion-list-header>
-            Account
+            Settings
           </ion-list-header>
-
           <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/login" routerLinkActive="active" routerDirection="root" detail="false">
-              <ion-icon slot="start" name="log-in"></ion-icon>
-              <ion-label>
-                Login
-              </ion-label>
+            <ion-item button (click)="openTutorial()" detail="false">
+              <ion-icon slot="start" name="hammer"></ion-icon>
+              <ion-label>Show Tutorials</ion-label>
             </ion-item>
           </ion-menu-toggle>
-
-          <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/support" routerLinkActive="active" routerDirection="root" detail="false">
-              <ion-icon slot="start" name="help"></ion-icon>
-              <ion-label>
-                Support
-              </ion-label>
-            </ion-item>
-          </ion-menu-toggle>
-
-          <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/signup" routerLinkActive="active" routerDirection="root" detail="false">
-              <ion-icon slot="start" name="person-add"></ion-icon>
-              <ion-label>
-                Signup
-              </ion-label>
-            </ion-item>
-          </ion-menu-toggle>
-
           <ion-item>
             <ion-icon slot="start" name="moon-outline"></ion-icon>
             <ion-label>
@@ -82,18 +52,6 @@
             </ion-label>
             <ion-toggle [(ngModel)]="dark"></ion-toggle>
           </ion-item>
-        </ion-list>
-
-        <ion-list lines="none">
-          <ion-list-header>
-            Tutorial
-          </ion-list-header>
-          <ion-menu-toggle autoHide="false">
-            <ion-item button (click)="openTutorial()" detail="false">
-              <ion-icon slot="start" name="hammer"></ion-icon>
-              <ion-label>Show Tutorial</ion-label>
-            </ion-item>
-          </ion-menu-toggle>
         </ion-list>
       </ion-content>
     </ion-menu>

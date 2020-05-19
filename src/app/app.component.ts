@@ -18,7 +18,6 @@ import { UserData } from './providers/user-data';
   encapsulation: ViewEncapsulation.None
 })
 export class AppComponent implements OnInit {
-  loggedIn = false;
   dark = false;
 
   constructor(
@@ -36,9 +35,6 @@ export class AppComponent implements OnInit {
   }
 
   async ngOnInit() {
-    this.checkLoginStatus();
-    this.listenForLoginEvents();
-
     this.swUpdate.available.subscribe(async res => {
       const toast = await this.toastCtrl.create({
         message: 'Update available!',
@@ -64,32 +60,6 @@ export class AppComponent implements OnInit {
     this.platform.ready().then(() => {
       this.statusBar.styleDefault();
       this.splashScreen.hide();
-    });
-  }
-
-  checkLoginStatus() {
-    return this.userData.isLoggedIn().then(loggedIn => {
-      return this.updateLoggedInStatus(loggedIn);
-    });
-  }
-
-  updateLoggedInStatus(loggedIn: boolean) {
-    setTimeout(() => {
-      this.loggedIn = loggedIn;
-    }, 300);
-  }
-
-  listenForLoginEvents() {
-    window.addEventListener('user:login', () => {
-      this.updateLoggedInStatus(true);
-    });
-
-    window.addEventListener('user:signup', () => {
-      this.updateLoggedInStatus(true);
-    });
-
-    window.addEventListener('user:logout', () => {
-      this.updateLoggedInStatus(false);
     });
   }
 
