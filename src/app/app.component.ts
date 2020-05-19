@@ -18,7 +18,7 @@ import { UserData } from './providers/user-data';
   encapsulation: ViewEncapsulation.None
 })
 export class AppComponent implements OnInit {
-  dark = false;
+  dark = true;
 
   constructor(
     private menu: MenuController,
