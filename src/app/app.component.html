@@ -4,17 +4,20 @@
     <ion-menu contentId="main-content">
       <ion-content>
         <ion-list lines="none">
-          <ion-list-header>
-            Celilsemi Sam Erkiner
-          </ion-list-header>
           <ion-menu-toggle autoHide="false">
             <ion-item routerLink="/app/tabs/about" routerLinkActive="selected" routerDirection="root" detail="false">
               <ion-icon slot="start" name="person"></ion-icon>
               <ion-label>
-                About
+                Celilsemi Sam Erkiner
               </ion-label>
             </ion-item>
           </ion-menu-toggle>
+        </ion-list>
+
+        <ion-list lines="none">
+          <ion-list-header>
+            Professional
+          </ion-list-header>
 
           <ion-menu-toggle autoHide="false">
             <ion-item routerLink="/app/tabs/schedule" routerLinkActive="selected" routerDirection="root" detail="false">
@@ -26,11 +29,50 @@
           </ion-menu-toggle>
 
           <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/app/tabs/contact" routerLinkActive="selected" routerDirection="root" detail="false">
-              <ion-icon slot="start" name="mail"></ion-icon>
-              <ion-label>
-                Contact
-              </ion-label>
+            <ion-item button (click)="openUrl('https://www.linkedin.com/in/cerkiner')" detail="false">
+              <ion-icon slot="start" name="logo-linkedin"></ion-icon>
+              <ion-label>Linkedin</ion-label>
+            </ion-item>
+          </ion-menu-toggle>
+
+          <ion-menu-toggle autoHide="false">
+            <ion-item button (click)="openUrl('https://stackoverflow.com/story/cerkiner')" detail="false">
+              <ion-icon slot="start" name="logo-stackoverflow"></ion-icon>
+              <ion-label>StackOverflow</ion-label>
+            </ion-item>
+          </ion-menu-toggle>
+
+          <ion-menu-toggle autoHide="false">
+            <ion-item button (click)="openUrl('https://github.com/cerkiner')" detail="false">
+              <ion-icon slot="start" name="logo-github"></ion-icon>
+              <ion-label>Github</ion-label>
+            </ion-item>
+          </ion-menu-toggle>
+        </ion-list>
+
+        <ion-list lines="none">
+          <ion-list-header>
+            Social
+          </ion-list-header>
+
+          <ion-menu-toggle autoHide="false">
+            <ion-item button (click)="openUrl('https://www.facebook.com/cerkiner')" detail="false">
+              <ion-icon slot="start" name="logo-facebook"></ion-icon>
+              <ion-label>Facebook</ion-label>
+            </ion-item>
+          </ion-menu-toggle>
+
+          <ion-menu-toggle autoHide="false">
+            <ion-item button (click)="openUrl('https://instagram.com/cerkiner')" detail="false">
+              <ion-icon slot="start" name="logo-instagram"></ion-icon>
+              <ion-label>Instagram</ion-label>
+            </ion-item>
+          </ion-menu-toggle>
+
+          <ion-menu-toggle autoHide="false">
+            <ion-item button (click)="openUrl('https://twitter.com/cerkiner')" detail="false">
+              <ion-icon slot="start" name="logo-twitter"></ion-icon>
+              <ion-label>Twitter</ion-label>
             </ion-item>
           </ion-menu-toggle>
         </ion-list>

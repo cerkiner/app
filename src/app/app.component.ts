@@ -74,4 +74,8 @@ export class AppComponent implements OnInit {
     this.storage.set('ion_did_tutorial', false);
     this.router.navigateByUrl('/tutorial');
   }
+
+  openUrl(url: string) {
+    window.open(url, '_system');
+  }
 }
