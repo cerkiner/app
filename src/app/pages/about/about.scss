@@ -15,6 +15,14 @@ ion-toolbar ion-menu-button {
   --color: white;
 }
 
+.about-bg {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  opacity: 0.75;
+  background: var(--ion-color-primary-shade);
+}
+
 .about-header {
   position: relative;
 
@@ -25,47 +33,82 @@ ion-toolbar ion-menu-button {
 .about-header .about-image {
   position: absolute;
 
-  top: 0;
-  left: 0;
+  top: 50%;
+  left: 50%;
   bottom: 0;
   right: 0;
 
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
+  transform: translate(-50%, -50%);
 
-  opacity: 0;
+  height: 80%;
 
-  transition: opacity 500ms ease-in-out;
-  background-image: url(/assets/img/about/madison.jpg);
+  border-radius: 100%;
+
+  user-select: none;
+  pointer-events: none;
+  
+  border: 6px solid var(--ion-background-color, #fff);
+
+  @media screen and (min-width : 568px) {
+    & {
+      border: 9px solid var(--ion-background-color, #fff);
+    }
+  }
+  @media screen and (min-width : 990px) {
+    & {
+      border: 12px solid var(--ion-background-color, #fff);
+    }
+  }
 }
 
 
 .about-info {
   position: absolute;
-  margin-top: -10px;
-  border-radius: 10px;
+  min-height: 70%;
+  margin: 0 3px 0 3px;
+  padding: 12px 3px 12px 3px;
+  border-radius: 32px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
   background: var(--ion-background-color, #fff);
-}
 
-.about-info h3 {
-  margin-top: 0;
-}
+  @media screen and (min-width : 568px) {
+    & {
+      margin: 0 6px 0 6px;
+      padding: 12px 6px 12px 6px;
+    }
+  }
+  @media screen and (min-width : 990px) {
+    & {
+      margin: 0 32px 0 32px;
+      padding: 16px;
+    }
+  }
 
-.about-info ion-list {
-  padding-top: 0;
-}
+  h3 {
+    margin-top: 0;
+  }
 
-.about-info p {
-  white-space: pre-line;
-  
-  line-height: 130%;
+  ion-list {
+    padding-top: 0;
+  }
 
-  color: var(--ion-color-dark);
-}
+  p {
+    white-space: pre-line;
 
-.about-info ion-icon {
-  margin-inline-end: 32px;
+    line-height: 150%;
+    letter-spacing: 1px;
+
+    color: var(--ion-color-dark);
+  }
+
+  ion-icon {
+    margin-inline-end: 32px;
+  }
+
+  ion-list {
+    background: transparent;
+  }
 }
 
 /*
