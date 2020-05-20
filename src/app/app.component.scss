@@ -41,6 +41,13 @@
     font-weight: 500;
   }
 
+  ion-menu[dir="rtl"].md ion-item {
+    margin-right: 0;
+    margin-left: 10px;
+
+    border-radius: 50px 0 0 50px;
+  }
+
   ion-menu.md ion-item.selected {
     --background: rgba(var(--ion-color-primary-rgb), 0.14);
   }
