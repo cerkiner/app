@@ -5,7 +5,7 @@
       <ion-content>
         <ion-list lines="none">
           <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/app/tabs/about" routerLinkActive="selected" routerDirection="root" detail="false">
+            <ion-item routerLink="/" routerLinkActive="selected" routerDirection="root" detail="false">
               <ion-icon slot="start" name="person"></ion-icon>
               <ion-label>
                 Celilsemi Sam Erkiner
@@ -20,8 +20,8 @@
           </ion-list-header>
 
           <ion-menu-toggle autoHide="false">
-            <ion-item routerLink="/app/tabs/schedule" routerLinkActive="selected" routerDirection="root" detail="false">
-              <ion-icon slot="start" name="albums"></ion-icon>
+            <ion-item button (click)="openUrl('https://celilsemi.erkiner.com/blog')" detail="false">
+              <ion-icon slot="start" name="logo-wordpress"></ion-icon>
               <ion-label>
                 Blog
               </ion-label>
