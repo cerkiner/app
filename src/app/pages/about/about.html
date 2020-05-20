@@ -24,38 +24,39 @@
     <h3 class="ion-padding-top ion-padding-start">About</h3>
 
     <p class="ion-padding-start ion-padding-end">
-      The Ionic Conference is a one-day conference on {{ conferenceDate | date: 'mediumDate' }} featuring talks from the Ionic team. It is focused on Ionic applications being built with Ionic Framework. This includes migrating apps to the latest version of the framework, Angular concepts, Webpack, Sass, and many other technologies used in Ionic 2. Tickets are completely sold out, and we’re expecting more than 1000 developers – making this the largest Ionic conference ever!
+      I am a web/hybrid software engineer who enjoys working on deadline-driven technological missions. Active users are my
+      biggest motivation for continuous development. I love cross-platform/cross-device solutions and keeping up with new
+      development trends. Portability of PWAs and Hybrid Apps amazes me! There are more than 35 mobile/ smartwatch apps in
+      various app stores that I had the chance to contribute or develop fully. I am good with servers but better on the
+      client-side. I am a rockstar in Ionic/Angular/TypeScript, proficient in NodeJS/JavaScript/Firebase and competent in
+      PHP/SQL/.NET.
     </p>
+    <p class="ion-padding-start ion-padding-end">
+      I always have some side projects of my own and I used to attend hackathons a lot. I have a first-place prize from
+      Macedonia, a third-place prize from Serbia, a second-place prize from Australia and some other awards and certifications
+      from several countries included my home country, Turkey.
+    </p>
+
 
     <h3 class="ion-padding-top ion-padding-start">Details</h3>
 
     <ion-list lines="none">
       <ion-item>
         <ion-label>
-          Location
+          Name
         </ion-label>
-        <ion-select [(ngModel)]="location" [interfaceOptions]="selectOptions">
-          <ion-select-option value="madison">Madison, WI</ion-select-option>
-          <ion-select-option value="austin">Austin, TX</ion-select-option>
-          <ion-select-option value="chicago">Chicago, IL</ion-select-option>
-          <ion-select-option value="seattle">Seattle, WA</ion-select-option>
-        </ion-select>
+        <ion-text slot="end">
+          Celilsemi Sam Erkiner
+        </ion-text>
       </ion-item>
       <ion-item>
         <ion-label>
-          Date
+          Occupation
         </ion-label>
-        <ion-datetime
-          displayFormat="MMM DD, YYYY"
-          max="2056"
-          [(ngModel)]="conferenceDate">
-        </ion-datetime>
+        <ion-text slot="end">
+          Software Engineer
+        </ion-text>
       </ion-item>
-    </ion-list>
-
-    <h3 class="ion-padding-top ion-padding-start">Internet</h3>
-
-    <ion-list lines="none">
       <ion-item>
         <ion-label>
           Wifi network
