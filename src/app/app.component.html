@@ -3,7 +3,12 @@
 
     <ion-menu side="start" contentId="main-content">
       <ion-content>
+
         <ion-list lines="none">
+          <ion-list-header>
+            About Sam
+          </ion-list-header>
+
           <ion-menu-toggle autoHide="false">
             <ion-item routerLink="/" routerLinkActive="selected" routerDirection="root" detail="false">
               <ion-icon slot="start" name="person"></ion-icon>
@@ -12,40 +17,51 @@
               </ion-label>
             </ion-item>
           </ion-menu-toggle>
-        </ion-list>
 
+          <ion-menu-toggle autoHide="false">
+            <ion-item button detail="false">
+              <ion-icon slot="start" name="at-circle"></ion-icon>
+              <ion-label>
+                cerkiner
+              </ion-label>
+            </ion-item>
+          </ion-menu-toggle>
 
-        <ion-list lines="none">
-          <ion-list-header>
-            About Me
-          </ion-list-header>
+          <ion-menu-toggle autoHide="false">
+            <ion-item button detail="false">
+              <ion-icon slot="start" name="briefcase"></ion-icon>
+              <ion-label>
+                Software Engineer
+              </ion-label>
+            </ion-item>
+          </ion-menu-toggle>
 
-          <ion-item>
-            <ion-label class="ion-text-wrap">
-              Occupation
-              <ion-text>
-                <p>Software Engineer</p>
-              </ion-text>
-            </ion-label>
-          </ion-item>
+          <ion-menu-toggle autoHide="false">
+            <ion-item button detail="false">
+              <ion-icon slot="start" name="star"></ion-icon>
+              <ion-label>
+                Web/Hybrid Apps
+              </ion-label>
+            </ion-item>
+          </ion-menu-toggle>
 
-          <ion-item>
-            <ion-label class="ion-text-wrap">
-              Expertise
-              <ion-text>
-                <p>Web/Hybrid App Specialist</p>
-              </ion-text>
-            </ion-label>
-          </ion-item>
+          <ion-menu-toggle autoHide="false">
+            <ion-item button detail="false">
+              <ion-icon slot="start" name="location"></ion-icon>
+              <ion-label>
+                Sydney, Australia
+              </ion-label>
+            </ion-item>
+          </ion-menu-toggle>
 
-          <ion-item>
-            <ion-label class="ion-text-wrap">
-              Location
-              <ion-text>
-                <p>Sydney, Australia</p>
-              </ion-text>
-            </ion-label>
-          </ion-item>
+          <ion-menu-toggle autoHide="false">
+            <ion-item button detail="false">
+              <ion-icon slot="start" name="home"></ion-icon>
+              <ion-label>
+                Eskişehir, Turkey
+              </ion-label>
+            </ion-item>
+          </ion-menu-toggle>
 
         </ion-list>
       </ion-content>
