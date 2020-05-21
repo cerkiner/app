@@ -96,7 +96,7 @@ ion-toolbar ion-menu-button {
   left: 50%;
   transform: translate(-50%, 0);
   width: calc(100% - 32px);
-  padding: 12px 3px 12px 3px;
+  padding: 3px 6px;
   margin: 0 0 16px 0;
   border-radius: 32px;
   background: var(--ion-background-color, #fff);
@@ -104,13 +104,13 @@ ion-toolbar ion-menu-button {
   @media screen and (min-width : 568px) {
     & {
       width: calc(100% - 48px);
-      padding: 12px 6px 12px 6px;
+      padding: 6px 9px;
     }
   }
   @media screen and (min-width : 990px) {
     & {
       max-width: 640px;
-      padding: 16px;
+      padding: 12px 16px;
     }
   }
 
