@@ -56,7 +56,7 @@ ion-toolbar ion-menu-button {
   position: relative;
 
   width: 100%;
-  height: 30%;
+  height: 40%;
 }
 
 .about-header .about-image {
@@ -69,23 +69,23 @@ ion-toolbar ion-menu-button {
 
   transform: translate(-50%, -50%);
 
-  height: 80%;
+  height: 90%;
 
   border-radius: 100%;
 
   user-select: none;
   pointer-events: none;
   
-  border: 6px solid var(--ion-background-color, #fff);
+  border: 9px solid var(--ion-background-color, #fff);
 
   @media screen and (min-width : 568px) {
     & {
-      border: 9px solid var(--ion-background-color, #fff);
+      border: 12px solid var(--ion-background-color, #fff);
     }
   }
   @media screen and (min-width : 990px) {
     & {
-      border: 12px solid var(--ion-background-color, #fff);
+      border: 16px solid var(--ion-background-color, #fff);
     }
   }
 }
