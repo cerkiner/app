@@ -7,18 +7,28 @@ describe('new App', () => {
     page = new AppPage();
   });
 
-  it('should display the menu', () => {
+  it('should display the menus', () => {
     page.navigateTo();
-    expect(page.getMenu()).toBeTruthy();
+    expect(page.getMenus()).toBeTruthy();
   });
 
-  it('should get the slides text', () => {
+  it('should get the first menu', () => {
     page.navigateTo();
-    expect(page.getFirstSlide()).toBe('ion-slide');
+    expect(page.getFirstMenu()).toBeTruthy();
+  });
+
+  it('should get the last menu', () => {
+    page.navigateTo();
+    expect(page.getFirstMenu()).toBeTruthy();
   });
 
   it('should create a router outlet', () => {
     page.navigateTo();
     expect(page.getRouter()).toBeTruthy();
+  });
+
+  it('should have the name', () => {
+    page.navigateTo();
+    expect(page.getText()).toContain('Celilsemi Sam Erkiner');
   });
 });

@@ -5,16 +5,22 @@ export class AppPage {
     return browser.get('/');
   }
 
-  async getMenu() {
+  async getMenus() {
     const el = this.getElement('app-root ion-menu');
     await this.waitForSelector(el);
     return el;
   }
 
-  async getFirstSlide() {
-    const el = this.getElement('app-root ion-slides ion-slide:first-child');
+  async getFirstMenu() {
+    const el = this.getElement('app-root ion-menu:first-child');
     await this.waitForSelector(el);
-    return el.getTagName();
+    return el;
+  }
+
+  async getLastMenu() {
+    const el = this.getElement('app-root ion-menu:last-child');
+    await this.waitForSelector(el);
+    return el;
   }
 
   async getRouter() {
@@ -23,8 +29,14 @@ export class AppPage {
     return el;
   }
 
+  async getText() {
+    const el = this.getElement('app-root');
+    await this.waitForSelector(el);
+    return await el.getText();
+  }
+
   async waitForSelector(el: ElementFinder) {
-    return browser.wait(ExpectedConditions.presenceOf(el), 3000);
+    return browser.wait(ExpectedConditions.presenceOf(el), 5000);
   }
 
   getElement(selector) {
