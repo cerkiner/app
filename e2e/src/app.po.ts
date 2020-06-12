@@ -29,12 +29,6 @@ export class AppPage {
     return el;
   }
 
-  async getText() {
-    const el = this.getElement('app-root');
-    await this.waitForSelector(el);
-    return await el.getText();
-  }
-
   async waitForSelector(el: ElementFinder) {
     return browser.wait(ExpectedConditions.presenceOf(el), 5000);
   }

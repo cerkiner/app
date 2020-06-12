@@ -27,8 +27,4 @@ describe('new App', () => {
     expect(page.getRouter()).toBeTruthy();
   });
 
-  it('should have the name', () => {
-    page.navigateTo();
-    expect(page.getText()).toContain('Celilsemi Sam Erkiner');
-  });
 });
