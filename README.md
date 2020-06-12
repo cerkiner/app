@@ -1,6 +1,6 @@
 # Celilsemi Sam Erkiner Personal Application
 
-This progressive web application is a personal page demo built with the Ionic Framework and Angular running on a Apache Server with LAMP Stack.
+This progressive web application is a personal page demo built with the Ionic Framework and Angular Framework intended to run on an Apache Server with LAMP Stack.
 
 ## Table of Contents
 - [Getting Started](#getting-started)
