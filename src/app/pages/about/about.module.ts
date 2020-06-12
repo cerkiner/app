@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { IonicModule } from '@ionic/angular';
 
-import { About } from './about';
+import { AboutComponent } from './about.component';
 import { AboutPageRoutingModule } from './about-routing.module';
 
 @NgModule({
@@ -12,7 +12,7 @@ import { AboutPageRoutingModule } from './about-routing.module';
     IonicModule,
     AboutPageRoutingModule
   ],
-  declarations: [About],
-  bootstrap: [About],
+  declarations: [AboutComponent],
+  bootstrap: [AboutComponent],
 })
 export class AboutModule {}
