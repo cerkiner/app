@@ -30,33 +30,33 @@ ion-toolbar ion-menu-button {
   
   opacity: 0.85;
 
-  background: linear-gradient(0deg,
-  var(--ion-color-primary-shade, #3880ff),
-  var(--ion-color-primary-tint, #3880ff),
-  var(--ion-color-primary-shade, #3880ff),
-  );
-  background-size: 200% 200%;
+  background: repeating-radial-gradient(circle at 0 0, transparent 0, var(--ion-color-primary, #3880ff) 40px), repeating-linear-gradient(var(--ion-color-primary-shade, #3880ff), var(--ion-color-primary-tint, #3880ff));
+
+  background-size: 150% 150%;
   animation-fill-mode: forwards;
   animation-iteration-count: infinite;
   animation-timing-function: ease-in-out;
   animation-delay: .2s;
-  animation-duration: 8s;
+  animation-duration: 24s;
   animation-name: pulse;
+
+  filter: blur(6px);
 }
 
 
 
 @keyframes pulse {
-    10% {background-position:9% 0%}
-    50% {background-position:92% 100%}
-    90% {background-position:9% 0%}
+    0% {background-position:100% 10%}
+    30% {background-position:10% 100%}
+    60% {background-position:100% 100%}
+    100% {background-position:100% 10%}
 }
 
 .about-header {
   position: relative;
 
   width: 100%;
-  height: 40%;
+  height: 20%;
 }
 
 .about-header .about-image {
@@ -96,10 +96,14 @@ ion-toolbar ion-menu-button {
   left: 50%;
   transform: translate(-50%, 0);
   width: calc(100% - 32px);
-  padding: 3px 6px;
-  margin: 0 0 16px 0;
-  border-radius: 32px;
-  background: var(--ion-background-color, #fff);
+  p {
+    padding: 16px 24px;
+    margin: 0 0 12px 0;
+    border-radius: 16px;
+    background: var(--ion-background-color, #fff);
+    font-size: 95%;
+    text-align: justify;
+  }
 
   @media screen and (min-width : 568px) {
     & {
@@ -111,6 +115,10 @@ ion-toolbar ion-menu-button {
     & {
       max-width: 640px;
       padding: 12px 16px;
+      p {
+        padding: 24px 32px;
+        border-radius: 24px;
+      }
     }
   }
 
