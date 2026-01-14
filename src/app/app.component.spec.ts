@@ -4,10 +4,11 @@ import { SwUpdate } from '@angular/service-worker';
 import { TestBed, async } from '@angular/core/testing';
 
 import { MenuController, Platform } from '@ionic/angular';
-import { SplashScreen } from '@ionic-native/splash-screen/ngx';
-import { StatusBar } from '@ionic-native/status-bar/ngx';
-import { IonicStorageModule } from '@ionic/storage';
+import { SplashScreen } from '@awesome-cordova-plugins/splash-screen/ngx';
+import { StatusBar } from '@awesome-cordova-plugins/status-bar/ngx';
+import { IonicStorageModule } from '@ionic/storage-angular';
 import { AppComponent } from './app.component';
+import { of } from 'rxjs';
 
 describe('AppComponent', () => {
   let menuSpy,
@@ -27,7 +28,14 @@ describe('AppComponent', () => {
     userDataSpy = jasmine.createSpyObj('UserData', ['isLoggedIn', 'logout']);
     statusBarSpy = jasmine.createSpyObj('StatusBar', ['styleDefault']);
     splashScreenSpy = jasmine.createSpyObj('SplashScreen', ['hide']);
-    swUpdateSpy = jasmine.createSpyObj('SwUpdate', ['available', 'activateUpdate']);
+    swUpdateSpy = {
+      versionUpdates: of({
+        type: 'VERSION_READY',
+        currentVersion: { hash: 'old', appData: {} },
+        latestVersion: { hash: 'new', appData: {} }
+      }),
+      activateUpdate: jasmine.createSpy('activateUpdate').and.returnValue(Promise.resolve())
+    };
     platformReadySpy = Promise.resolve();
     platformSpy = jasmine.createSpyObj('Platform', { ready: platformReadySpy });
 
