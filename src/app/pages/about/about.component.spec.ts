@@ -1,5 +1,7 @@
 import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
 
+import { CUSTOM_ELEMENTS_SCHEMA } from '@angular/core';
+
 import { AboutComponent } from './about.component';
 
 describe('About', () => {
@@ -8,7 +10,10 @@ describe('About', () => {
 
     beforeEach(waitForAsync(() => {
         TestBed.configureTestingModule({
-            declarations: [AboutComponent]
+            declarations: [AboutComponent],
+            // Shallow component test: Ionic elements are tested by Ionic itself.
+            schemas: [CUSTOM_ELEMENTS_SCHEMA],
+            errorOnUnknownElements: true
         })
             .compileComponents();
     }));
