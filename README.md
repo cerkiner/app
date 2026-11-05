@@ -20,5 +20,9 @@ _Note: See [How to Prevent Permissions Errors](https://docs.npmjs.com/getting-st
 
 ## Deploying as Progressive Web App
 
-1. Run `npm run ionic:build --prod`
-2. Push the `app` folder to your hosting service
+1. Run `npm run build -- --configuration production`
+2. Upload the generated `app/` files to `public_html/app/` on the Hostinger website `erkiner.com`. The public address is https://sam.erkiner.com/app/.
+3. Upload supporting assets first, then `index.html` and finally `ngsw.json`. Retain previous hashed assets so existing visitors can finish using their cached version.
+4. Verify the live page and service-worker resources after uploading. The deployment target is recorded in `.hostinger/site.json`.
+
+The hosting document root is shared with WordPress, the blog and the API. Use targeted file uploads into `app/`; do not use a whole-site archive deployment or replace the document root. Preserve the existing server redirects and the canonical URL and migration cleanup in `src/index.html`.
