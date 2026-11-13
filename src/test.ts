@@ -11,6 +11,8 @@ import {
 getTestBed().initTestEnvironment(
   BrowserDynamicTestingModule,
   platformBrowserDynamicTesting(), {
-    teardown: { destroyAfterEach: false }
+    teardown: { destroyAfterEach: false },
+    errorOnUnknownElements: true,
+    errorOnUnknownProperties: true
 }
 );
