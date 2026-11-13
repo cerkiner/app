@@ -77,6 +77,7 @@ test('implementation commands stay inside Docker argv and credentials are never 
   const args = containerArgs('codex-1', '/tmp/work/workspace', false).join(' ');
   assert.ok(args.includes('--cap-drop=ALL'));
   assert.ok(args.includes('--security-opt=no-new-privileges'));
+  assert.ok(args.includes('/tmp:rw,exec,nosuid,nodev,size=1g')); // downloaded browser binaries must execute
   assert.ok(!args.includes('credentials') && !args.includes('docker.sock') && !args.includes('--privileged'));
   const review = containerArgs('codex-1', '/tmp/work/workspace', true).join(' ');
   assert.ok(review.includes('--network none'));

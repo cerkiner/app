@@ -1,7 +1,7 @@
 # Autonomous Codex development in GitHub Actions
 
 This implementation investigates new issues, independently reviews new PR heads,
-and repairs eligible failing `CI` runs, with no automatic approval or merge. It
+and repairs eligible failing `CI` runs, with no automatic PR approval or merge. It
 uses the Codex CLI with a ChatGPT subscription, GitHub CLI, repository secrets,
 comments, commits and short-lived diagnostic artifacts. There is no external
 service, database, Agents API or API-key billing fallback.
@@ -38,6 +38,7 @@ secrets and paid environment protection features are not required.
 | `workflows/codex-repair.yml` | A failed completed `CI` run dispatches a repair investigation. |
 | `workflows/codex-agent.yml` | Trusted default-branch worker; also handles completion of the PR review signal. |
 | `scripts/codex/agent.mjs` | Context collection, provenance, eligibility, attempt reservations, validated commits, reviews, comments and downstream dispatch. |
+| `scripts/codex/checks.mjs` | Start exact, trusted bot-generated PR workflow runs; controlled dispatch remains the fallback. |
 | `scripts/codex/state.mjs` | Retry cycles, secret freshness, finding deduplication and diff-line mapping. |
 | `scripts/codex/auth.mjs` | Restore, validate, persist and erase subscription credentials. |
 | `scripts/codex/run-codex.mjs` | Replaceable Codex execution adapter. CLI is pinned to `0.169.0`. |
@@ -49,6 +50,16 @@ project dependencies. The workflows use Node 24 and `ubuntu-latest`. Existing
 third-party actions are pinned to full commits. The container base is versioned
 as `node:24.15.0-bookworm` and pinned to its verified multi-platform image digest;
 Debian packages still resolve at build time.
+
+GitHub can hold `pull_request` workflows created by `GITHUB_TOKEN` for execution
+approval. After a validated publish, the coordinator starts only the matching
+`CI.yml` and `codex-review.yml` runs for the exact repository, PR, branch and SHA.
+It uses the existing short-lived Actions-write token, and only when the entire
+workflow tree matches the trusted controller checkout. This authorizes CI
+execution, never a PR review approval or merge. Changed workflow definitions
+remain subject to GitHub's workflow approval policy; Codex still reviews them.
+Older event behavior falls back to controlled CI and review dispatches. See
+[GitHub token event behavior](https://docs.github.com/en/actions/concepts/security/github_token).
 
 The execution adapter accepts a collected task and emits `result.json` according
 to `result.schema.json`, plus restricted diagnostic events and metadata. It does
@@ -207,8 +218,9 @@ or credential data.
    Their operations remain confined to the container and review's restricted
    tool set; the overall interactive approval policy remains `never`.
 3. Repository files are exported without host Git metadata into a Docker
-   container. It has no auth mount, PAT, GitHub token, Docker socket, host PID
-   namespace or elevated capabilities. The root filesystem is read-only, with
+   container. Its temporary filesystem permits downloaded browser binaries to run,
+   while retaining `nosuid` and `nodev`. It has no auth mount, PAT, GitHub token,
+   Docker socket, host PID namespace or elevated capabilities. The root filesystem is read-only, with
    bounded memory/CPUs/processes and a private writable `/tmp`. Implementation
    commands can install dependencies and run tests over normal network access.
    Untrusted commands are Docker argument data, never evaluated by a host shell.

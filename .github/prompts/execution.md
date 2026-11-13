@@ -18,6 +18,9 @@ when needed). Always state which checks actually ran and their outcome.
 
 Return the JSON result required by the output schema. Use "changes" only for an
 implemented change; list tests with passed/failed/not_run, and explain limitations.
+Describe the workspace change and validation in the summary. The coordinator
+owns branch, commit, push and PR publication and appends their actual status;
+do not claim that no commit or push occurred in your change summary.
 Never include credentials, raw environment dumps, full transcripts, or hidden
 machine-record markers in your output. Do not modify .github/, .codex/, .agents/,
 AGENTS.md, credentials, symlinks, submodules, package scripts or test configuration.
