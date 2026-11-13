@@ -45,10 +45,12 @@ export function cliArgs(controller, container, mode, model = '') {
     'mcp_servers.workspace.args': [path.join(ROOT, '.github/scripts/codex/sandbox-mcp.mjs'), '--serve', container, mode],
     'mcp_servers.workspace.env_vars': [], 'mcp_servers.workspace.required': true,
     'mcp_servers.workspace.tool_timeout_sec': 190,
-    'mcp_servers.workspace.tools.workspace.approval_mode': 'auto',
-    'mcp_servers.workspace.tools.list_files.approval_mode': 'auto',
-    'mcp_servers.workspace.tools.read_file.approval_mode': 'auto',
-    'mcp_servers.workspace.tools.search.approval_mode': 'auto',
+    // Codex's auto mode still prompts for unannotated tools. Only these trusted
+    // container-bound tools are preapproved; host capabilities remain disabled.
+    'mcp_servers.workspace.tools.workspace.approval_mode': 'approve',
+    'mcp_servers.workspace.tools.list_files.approval_mode': 'approve',
+    'mcp_servers.workspace.tools.read_file.approval_mode': 'approve',
+    'mcp_servers.workspace.tools.search.approval_mode': 'approve',
   };
   const args = ['exec', '--strict-config', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--skip-git-repo-check',
     '--cd', controller, '--json', '--color', 'never',
