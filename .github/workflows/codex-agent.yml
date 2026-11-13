@@ -1,0 +1,130 @@
+name: Codex trusted worker
+
+on:
+  workflow_run:
+    workflows: [Codex PR review request]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Agent task
+        required: true
+        type: choice
+        options: [issue, review, repair]
+      target:
+        description: Issue/PR number, or failing CI run ID for repair
+        required: true
+        type: string
+      expected_sha:
+        description: Optional exact PR head SHA (stale requests are skipped)
+        type: string
+        default: ''
+      refresh_hops:
+        description: Internal stale-credential redispatch counter
+        type: string
+        default: '0'
+      new_cycle:
+        description: Maintainer explicitly requests a new repair cycle
+        type: boolean
+        default: false
+      cycle_request:
+        description: Internal original maintainer cycle request (preserved across fresh-auth redispatch)
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  agent:
+    # One group covers all issue/review/repair jobs sharing this auth session.
+    # queue:max preserves pending events (GitHub's default queue drops them).
+    concurrency:
+      group: codex-subscription-credentials-v1
+      queue: max
+      cancel-in-progress: false
+    # Never execute the worker definition from a contributor's branch.
+    # Target events already dispatch directly; only PR-signal completions need
+    # the workflow_run route, whose head SHA represents the PR revision.
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      CODEX_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CODEX_MODE: ${{ inputs.mode || 'review' }}
+      CODEX_TARGET: ${{ inputs.target || github.event.workflow_run.id }}
+      CODEX_EXPECTED_SHA: ${{ inputs.expected_sha || '' }}
+      CODEX_NEW_CYCLE: ${{ inputs.new_cycle || false }}
+      CODEX_CYCLE_REQUEST: ${{ inputs.cycle_request || '' }}
+      CODEX_REFRESH_HOPS: ${{ inputs.refresh_hops || '0' }}
+      CODEX_AUTOMATION_ENABLED: ${{ vars.CODEX_AUTOMATION_ENABLED }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Validate provenance, policy and current context
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/codex/agent.mjs prepare
+      - name: Restore fresh subscription credentials or redispatch
+        id: auth
+        if: steps.prepare.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          CODEX_DISPATCH_TOKEN: ${{ github.token }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
+        run: node .github/scripts/codex/auth.mjs restore
+      - name: Reserve a durable attempt
+        if: steps.auth.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/codex/agent.mjs reserve
+      - name: Install the verified Codex CLI
+        if: steps.auth.outputs.ready == 'true'
+        run: npm install --global --ignore-scripts @openai/codex@0.169.0
+      - name: Execute Codex with isolated repository tools
+        id: execute
+        if: steps.auth.outputs.ready == 'true'
+        env:
+          CODEX_MODEL: ${{ vars.CODEX_MODEL }}
+        run: node .github/scripts/codex/run-codex.mjs
+      - name: Persist actual refreshed credentials even after execution failure
+        id: persist
+        if: always() && steps.auth.outputs.restored == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: node .github/scripts/codex/auth.mjs persist
+      - name: Remove auth and ephemeral session files
+        if: always()
+        run: node .github/scripts/codex/auth.mjs cleanup
+      - name: Validate and publish results
+        id: publish
+        if: always() && steps.execute.outcome != 'skipped' && steps.persist.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/codex/agent.mjs publish
+      - name: Report an incomplete run
+        if: failure() && steps.prepare.outputs.proceed == 'true' && steps.publish.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/codex/agent.mjs report-failure
+      - name: Upload only sanitized diagnostic files
+        if: always() && steps.prepare.outputs.proceed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: codex-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codex-agent/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
