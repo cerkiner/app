@@ -1,5 +1,8 @@
 import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
 
+import { provideRouter } from '@angular/router';
+import { IonicModule } from '@ionic/angular/lazy';
+
 import { AboutComponent } from './about.component';
 
 describe('About', () => {
@@ -8,7 +11,9 @@ describe('About', () => {
 
     beforeEach(waitForAsync(() => {
         TestBed.configureTestingModule({
-            declarations: [AboutComponent]
+            declarations: [AboutComponent],
+            imports: [IonicModule.forRoot({ animated: false })],
+            providers: [provideRouter([])]
         })
             .compileComponents();
     }));

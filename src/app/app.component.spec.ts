@@ -1,71 +1,53 @@
-import { CUSTOM_ELEMENTS_SCHEMA } from '@angular/core';
-import { Router } from '@angular/router';
+import { provideRouter, RouterModule } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
 import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
-
-import { MenuController, Platform } from '@ionic/angular/lazy';
+import { IonicModule, Platform } from '@ionic/angular/lazy';
 import { SplashScreen } from '@awesome-cordova-plugins/splash-screen/ngx';
 import { StatusBar } from '@awesome-cordova-plugins/status-bar/ngx';
-import { IonicStorageModule } from '@ionic/storage-angular';
+import { EMPTY } from 'rxjs';
+
 import { AppComponent } from './app.component';
-import { of } from 'rxjs';
 
 describe('AppComponent', () => {
-  let menuSpy: jasmine.SpyObj<MenuController>;
-  let routerSpy: jasmine.SpyObj<Router>;
-  let userDataSpy: jasmine.SpyObj<any>;
-  let statusBarSpy: jasmine.SpyObj<StatusBar>;
-  let splashScreenSpy: jasmine.SpyObj<SplashScreen>;
-  let swUpdateSpy: unknown;
-  let platformReadySpy: Promise<void>;
-  let platformSpy: jasmine.SpyObj<Platform>;
-  let app: AppComponent;
   let fixture: ComponentFixture<AppComponent>;
+  let platform: Platform;
+  let platformReady: Promise<string>;
+  let statusBar: jasmine.SpyObj<StatusBar>;
+  let splashScreen: jasmine.SpyObj<SplashScreen>;
 
   beforeEach(waitForAsync(() => {
-    menuSpy = jasmine.createSpyObj('MenuController', ['toggle', 'enable']);
-    routerSpy = jasmine.createSpyObj('Router', ['navigateByUrl']);
-    userDataSpy = jasmine.createSpyObj('UserData', ['isLoggedIn', 'logout']);
-    statusBarSpy = jasmine.createSpyObj('StatusBar', ['styleDefault']);
-    splashScreenSpy = jasmine.createSpyObj('SplashScreen', ['hide']);
-    swUpdateSpy = {
-      versionUpdates: of({
-        type: 'VERSION_READY',
-        currentVersion: { hash: 'old', appData: {} },
-        latestVersion: { hash: 'new', appData: {} }
-      }),
-      activateUpdate: jasmine.createSpy('activateUpdate').and.returnValue(Promise.resolve())
-    };
-    platformReadySpy = Promise.resolve();
-    platformSpy = jasmine.createSpyObj('Platform', { ready: platformReadySpy });
-
+    statusBar = jasmine.createSpyObj('StatusBar', ['styleDefault']);
+    splashScreen = jasmine.createSpyObj('SplashScreen', ['hide']);
     TestBed.configureTestingModule({
       declarations: [AppComponent],
-      imports: [IonicStorageModule.forRoot()],
-      schemas: [CUSTOM_ELEMENTS_SCHEMA],
+      imports: [IonicModule.forRoot({ animated: false }), RouterModule],
       providers: [
-        { provide: MenuController, useValue: menuSpy },
-        { provide: Router, useValue: routerSpy },
-        { provide: StatusBar, useValue: statusBarSpy },
-        { provide: SplashScreen, useValue: splashScreenSpy },
-        { provide: SwUpdate, useValue: swUpdateSpy },
-        { provide: Platform, useValue: platformSpy }
+        provideRouter([]),
+        { provide: StatusBar, useValue: statusBar },
+        { provide: SplashScreen, useValue: splashScreen },
+        { provide: SwUpdate, useValue: { versionUpdates: EMPTY } }
       ]
     }).compileComponents();
   }));
+
   beforeEach(() => {
+    platform = TestBed.inject(Platform);
+    platformReady = Promise.resolve('dom');
+    spyOn(platform, 'ready').and.returnValue(platformReady);
     fixture = TestBed.createComponent(AppComponent);
-    app = fixture.debugElement.componentInstance;
+    fixture.detectChanges();
   });
 
-  it('should create the app', () => {
-    expect(app).toBeTruthy();
+  it('should create the app and render its navigation', () => {
+    expect(fixture.componentInstance).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('#main-content')).toBeTruthy();
+    expect(fixture.nativeElement.querySelectorAll('ion-menu').length).toBe(2);
   });
 
   it('should initialize the app', async () => {
-    expect(platformSpy.ready).toHaveBeenCalled();
-    await platformReadySpy;
-    expect(statusBarSpy.styleDefault).toHaveBeenCalled();
-    expect(splashScreenSpy.hide).toHaveBeenCalled();
+    expect(platform.ready).toHaveBeenCalled();
+    await platformReady;
+    expect(statusBar.styleDefault).toHaveBeenCalled();
+    expect(splashScreen.hide).toHaveBeenCalled();
   });
 });
