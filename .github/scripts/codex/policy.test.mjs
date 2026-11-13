@@ -86,6 +86,8 @@ test('Codex controller has no native shell, image, hooks, plugins or child agent
   const args = cliArgs('/tmp/controller', 'codex-1', 'review');
   for (const setting of ['features.shell_tool=false', 'features.view_image=false', 'features.hooks=false', 'features.multi_agent=false', 'features.plugins=false', 'forced_login_method="chatgpt"']) assert.ok(args.includes(setting), setting);
   assert.ok(args.includes('default_permissions="controller"'));
+  assert.ok(args.includes('features.code_mode={"enabled"=false,"direct_only_tool_namespaces"=["mcp__workspace"]}'));
+  assert.ok(args.includes('features.code_mode_host=false'));
   assert.ok(args.some(a => a.startsWith('permissions=') && a.includes('credentials"="deny"') && a.includes('"/proc"="deny"')));
   assert.ok(args.includes('--ignore-user-config') && args.includes('--ignore-rules') && args.includes('--ephemeral'));
   process.env.CODEX_AUTH_JSON_B64 = 'fake-test-secret'; process.env.GH_TOKEN = 'fake-test-token';

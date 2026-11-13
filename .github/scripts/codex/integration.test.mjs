@@ -152,6 +152,19 @@ test('completed issue records prevent another implementation run', t => {
   assert.equal(run.status, 0, run.stderr);
   assert.equal(existsSync(path.join(f.work, 'task.json')), false);
 });
+test('an issue with a previous infrastructure failure can be retried after recovery', t => {
+  const f = fixture(t, {
+    'repos/owner/repo': { visibility: 'public', default_branch: 'master' },
+    'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z' },
+    'repos/owner/repo/issues/1': { number: 1, state: 'open', title: 'Investigate', body: 'Steps', user: { login: 'creator', type: 'User' } },
+    'repos/owner/repo/commits/master': { sha: a },
+    'repos/owner/repo/issues/1/comments?per_page=100': [{ user: { login: BOT, type: 'Bot' }, body: marker({ kind: 'issue', status: 'complete', outcome: 'external_failure' }) }],
+    'repos/owner/repo/pulls?state=all&head=owner%3Acodex%2Fissue-1&per_page=100': [],
+  });
+  const run = f.run('agent.mjs', 'prepare');
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(JSON.parse(readFileSync(path.join(f.work, 'task.json'))).mode, 'issue');
+});
 test('a non-coding issue result publishes findings without Git operations or a PR', t => {
   const f = fixture(t, { 'repos/owner/repo/issues/comments/101': { id: 101 } });
   writeFileSync(path.join(f.work, 'task.json'), JSON.stringify({ mode: 'issue', repo: 'owner/repo', number: 1, run_id: 50,
