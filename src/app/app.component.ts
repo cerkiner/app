@@ -1,7 +1,7 @@
 import { Component, OnInit } from '@angular/core';
 import { SwUpdate, VersionReadyEvent } from '@angular/service-worker';
 
-import { Platform, ToastController } from '@ionic/angular';
+import { Platform, ToastController } from '@ionic/angular/lazy';
 
 import { SplashScreen } from '@awesome-cordova-plugins/splash-screen/ngx';
 import { StatusBar } from '@awesome-cordova-plugins/status-bar/ngx';

@@ -3,7 +3,7 @@ import { BrowserModule } from '@angular/platform-browser';
 import { InAppBrowser } from '@awesome-cordova-plugins/in-app-browser/ngx';
 import { SplashScreen } from '@awesome-cordova-plugins/splash-screen/ngx';
 import { StatusBar } from '@awesome-cordova-plugins/status-bar/ngx';
-import { IonicModule } from '@ionic/angular';
+import { IonicModule } from '@ionic/angular/lazy';
 import { IonicStorageModule } from '@ionic/storage-angular';
 
 import { AppRoutingModule } from './app-routing.module';

@@ -9,14 +9,16 @@ This progressive web application is a personal page demo built with the Ionic Fr
 
 ## Getting Started
 
-* [Download the installer](https://nodejs.org/) for Node LTS.
-* Install the ionic CLI globally: `npm install -g ionic`
-* Clone this repository: `git clone https://github.com/cerkiner/app.git`.
-* Run `npm install` from the project root.
-* Run `ionic serve` in a terminal from the project root.
-* Profit. :tada:
+Use Node 24 (managed by nvm):
 
-_Note: See [How to Prevent Permissions Errors](https://docs.npmjs.com/getting-started/fixing-npm-permissions) if you are running into issues when trying to install packages globally._
+```sh
+nvm install
+nvm use
+npm ci
+npm start
+```
+
+Open http://localhost:4200. The local server reloads when source files change.
 
 ## Deploying as Progressive Web App
 

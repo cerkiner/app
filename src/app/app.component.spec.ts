@@ -1,9 +1,9 @@
 import { CUSTOM_ELEMENTS_SCHEMA } from '@angular/core';
 import { Router } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
-import { TestBed, waitForAsync } from '@angular/core/testing';
+import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
 
-import { MenuController, Platform } from '@ionic/angular';
+import { MenuController, Platform } from '@ionic/angular/lazy';
 import { SplashScreen } from '@awesome-cordova-plugins/splash-screen/ngx';
 import { StatusBar } from '@awesome-cordova-plugins/status-bar/ngx';
 import { IonicStorageModule } from '@ionic/storage-angular';
@@ -11,16 +11,16 @@ import { AppComponent } from './app.component';
 import { of } from 'rxjs';
 
 describe('AppComponent', () => {
-  let menuSpy,
-    routerSpy,
-    userDataSpy,
-    statusBarSpy,
-    splashScreenSpy,
-    swUpdateSpy,
-    platformReadySpy,
-    platformSpy,
-    app,
-    fixture;
+  let menuSpy: jasmine.SpyObj<MenuController>;
+  let routerSpy: jasmine.SpyObj<Router>;
+  let userDataSpy: jasmine.SpyObj<any>;
+  let statusBarSpy: jasmine.SpyObj<StatusBar>;
+  let splashScreenSpy: jasmine.SpyObj<SplashScreen>;
+  let swUpdateSpy: unknown;
+  let platformReadySpy: Promise<void>;
+  let platformSpy: jasmine.SpyObj<Platform>;
+  let app: AppComponent;
+  let fixture: ComponentFixture<AppComponent>;
 
   beforeEach(waitForAsync(() => {
     menuSpy = jasmine.createSpyObj('MenuController', ['toggle', 'enable']);
