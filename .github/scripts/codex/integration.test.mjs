@@ -27,7 +27,9 @@ process.stdout.write(JSON.stringify(value));
   writeFileSync(path.join(bin, 'git'), `#!/usr/bin/env node
 const fs=require('node:fs');const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(dir + '/git-calls.jsonl')},JSON.stringify(args)+'\\n');
-process.exitCode=args.includes('fetch')?0:23;
+if(args.includes('fetch')) process.exitCode=0;
+else if(args[0]==='rev-parse' && args[1]==='FETCH_HEAD') process.stdout.write(process.env.FIXTURE_FETCHED_SHA || 'a'.repeat(40));
+else process.exitCode=23;
 `, { mode: 0o755 });
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURE: dir, CODEX_WORK: work, GH_REPO: 'owner/repo', GH_TOKEN: 'test-pat',
     GITHUB_RUN_ID: '50', GITHUB_SERVER_URL: 'https://github.com', CODEX_MODE: 'issue', CODEX_TARGET: '1', GITHUB_EVENT_NAME: 'workflow_dispatch' };
@@ -84,7 +86,7 @@ test('a collaborator issue runs automatically in a public repository without a v
   const f = fixture(t, {
     'repos/owner/repo': { visibility: 'public', default_branch: 'master' },
     'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z' },
-    'repos/owner/repo/issues/1': { number: 1, state: 'open', title: 'Fix the bug', body: 'Steps', labels: [], user: { login: 'maintainer', type: 'User' } },
+    'repos/owner/repo/issues/1': { number: 1, state: 'open', title: 'Fix the bug', body: 'Steps', user: { login: 'maintainer', type: 'User' } },
     'repos/owner/repo/commits/master': { sha: a },
     'repos/owner/repo/issues/1/comments?per_page=100': [],
     'repos/owner/repo/collaborators/maintainer/permission': { permission: 'admin' },
@@ -96,33 +98,46 @@ test('a collaborator issue runs automatically in a public repository without a v
   assert.equal(existsSync(path.join(f.dir, 'git-calls.jsonl')), true);
   assert.ok(!f.calls().some(c => c.args.some(a => a.includes('/secrets/'))));
 });
-test('a non-collaborator cannot start an implementation through issue text', t => {
+test('every new issue starts investigation regardless of creator and without extra metadata', t => {
   const f = fixture(t, {
     'repos/owner/repo': { visibility: 'public', default_branch: 'master' },
     'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z' },
-    'repos/owner/repo/issues/1': { number: 1, state: 'open', user: { login: 'outsider', type: 'User' } },
+    'repos/owner/repo/issues/1': { number: 1, state: 'open', title: 'Fix the bug', body: 'Steps', user: { login: 'outsider', type: 'User' } },
     'repos/owner/repo/commits/master': { sha: a },
     'repos/owner/repo/issues/1/comments?per_page=100': [],
-    'repos/owner/repo/collaborators/outsider/permission': { permission: 'read' },
-    'repos/owner/repo/issues/1/comments': { id: 100 },
+    'repos/owner/repo/pulls?state=all&head=owner%3Acodex%2Fissue-1&per_page=100': [],
   });
   const run = f.run('agent.mjs', 'prepare');
   assert.equal(run.status, 0, run.stderr);
-  assert.equal(existsSync(path.join(f.work, 'task.json')), false);
-  assert.equal(existsSync(path.join(f.dir, 'git-calls.jsonl')), false);
-  assert.match(JSON.parse(f.calls().at(-1).input).body, /repository collaborators/);
+  assert.equal(JSON.parse(readFileSync(path.join(f.work, 'task.json'))).context.issue.author, 'outsider');
+  assert.equal(existsSync(path.join(f.dir, 'git-calls.jsonl')), true);
+  assert.ok(!f.calls().some(c => c.args.some(a => a.includes('/collaborators/'))));
 });
-test('fork PR is refused before untrusted code or subscription auth is loaded', t => {
-  const f = fixture(t, {
-    'repos/owner/repo': { visibility: 'private', default_branch: 'master' },
-    'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z' },
-    'repos/owner/repo/pulls/1': { number: 1, state: 'open', head: { sha: a, repo: { full_name: 'attacker/fork' } }, base: { repo: { full_name: 'owner/repo' } } },
-    'repos/owner/repo/issues/1/comments?per_page=100': [],
-    'repos/owner/repo/issues/1/comments': { id: 100 },
-  });
+test('fork PRs receive a read-only review through the base repository PR head ref', t => {
+  const responses = repairResponses();
+  responses['repos/owner/repo/pulls/1'].head.repo.full_name = 'contributor/fork';
+  responses['repos/owner/repo/pulls/1'].user = { login: 'contributor', type: 'User' };
+  const f = fixture(t, responses);
   const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'review' });
   assert.equal(run.status, 0, run.stderr);
-  assert.match(JSON.parse(f.calls().at(-1).input).body, /Fork PRs/);
+  assert.equal(JSON.parse(readFileSync(path.join(f.work, 'task.json'))).mode, 'review');
+  assert.match(readFileSync(path.join(f.dir, 'git-calls.jsonl'), 'utf8'), /refs\/pull\/1\/head/);
+  assert.ok(!f.calls().some(c => c.args.some(a => a.includes('/collaborators/'))));
+});
+test('fork ref changes during fetch abort the stale review before execution', t => {
+  const responses = repairResponses(); responses['repos/owner/repo/pulls/1'].head.repo.full_name = 'contributor/fork';
+  const f = fixture(t, responses);
+  const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'review', FIXTURE_FETCHED_SHA: b });
+  assert.notEqual(run.status, 0); assert.match(run.stderr, /head changed during fetch/);
+  assert.equal(existsSync(path.join(f.work, 'task.json')), false);
+});
+test('repair does not fetch or modify an external contributor branch', t => {
+  const responses = repairResponses(); responses['repos/owner/repo/actions/runs/123'].head_repository.full_name = 'contributor/fork';
+  const f = fixture(t, responses);
+  const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'repair', CODEX_TARGET: '123' });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(existsSync(path.join(f.work, 'task.json')), false);
+  assert.equal(existsSync(path.join(f.dir, 'git-calls.jsonl')), false);
 });
 test('completed issue records prevent another implementation run', t => {
   const f = fixture(t, {
@@ -150,14 +165,14 @@ test('a non-coding issue result publishes findings without Git operations or a P
   assert.equal(existsSync(path.join(f.dir, 'git-calls.jsonl')), false);
   assert.ok(!f.calls().some(c => c.args.some(a => /\/pulls/.test(a))));
 });
-function repairResponses(history = [], { labels = [{ name: 'codex-autofix' }], head = a, protectedBranch = false } = {}) {
+function repairResponses(history = [], { head = a, protectedBranch = false } = {}) {
   return {
     'repos/owner/repo': { visibility: 'private', default_branch: 'master' },
     'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z', path: '.github/workflows/codex-agent.yml', event: 'workflow_dispatch', actor: { login: 'maintainer', type: 'User' } },
     'repos/owner/repo/actions/runs/123': { id: 123, run_attempt: 1, repository: { full_name: 'owner/repo' },
       head_repository: { full_name: 'owner/repo' }, head_sha: head, name: 'CI', path: '.github/workflows/CI.yml', status: 'completed',
       conclusion: 'failure', event: 'pull_request', pull_requests: [{ number: 1 }], html_url: 'https://github.com/owner/repo/actions/runs/123' },
-    'repos/owner/repo/pulls/1': { number: 1, state: 'open', title: 'Fix', body: '', labels, user: { login: 'maintainer', type: 'User' },
+    'repos/owner/repo/pulls/1': { number: 1, state: 'open', title: 'Fix', body: '', user: { login: 'maintainer', type: 'User' },
       head: { sha: head, ref: 'feature', repo: { full_name: 'owner/repo' } }, base: { sha: a, ref: 'master', repo: { full_name: 'owner/repo' } } },
     'repos/owner/repo/issues/1/comments?per_page=100': history.map((r, i) => ({ id: 100 + i, user: { login: BOT, type: 'Bot' }, body: marker(r) })),
     'repos/owner/repo/pulls/1/reviews?per_page=100': [],
@@ -172,7 +187,7 @@ function repairResponses(history = [], { labels = [{ name: 'codex-autofix' }], h
     'repos/owner/repo/issues/comments/101': { id: 101 },
   };
 }
-test('an opted-in failed PR collects the exact revision and reserves a persistent attempt', t => {
+test('any repository-owned failed PR reserves repair automatically without metadata or provenance', t => {
   const f = fixture(t, repairResponses());
   const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'repair', CODEX_TARGET: '123' });
   assert.equal(run.status, 0, run.stderr);
@@ -183,8 +198,8 @@ test('an opted-in failed PR collects the exact revision and reserves a persisten
   const reserved = JSON.parse(readFileSync(path.join(f.work, 'task.json')));
   assert.equal(reserved.record.attempt, 1); assert.equal(reserved.record.input_sha, a); assert.equal(reserved.comment_id, 101);
 });
-test('human PR without opt-in and protected branches never reserve a repair or fetch source', t => {
-  for (const options of [{ labels: [] }, { protectedBranch: true }]) {
+test('protected branches never reserve a repair or fetch source', t => {
+  for (const options of [{ protectedBranch: true }]) {
     const f = fixture(t, repairResponses([], options));
     const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'repair', CODEX_TARGET: '123' });
     assert.equal(run.status, 0, run.stderr);
@@ -265,8 +280,8 @@ test('a collaborator PR with merge conflicts reaches review execution on a publi
   assert.equal(task.mode, 'review'); assert.equal(task.head_sha, a);
   assert.ok(!f.calls().some(c => c.args.some(a => a.includes('/checks') || a.includes('/actions/runs/123'))));
 });
-test('a PR with Codex provenance is reviewed without requiring the bot to be a collaborator', t => {
-  const responses = repairResponses([{ kind: 'origin', branch: 'feature', initial_sha: a }]);
+test('a bot-authored PR is reviewed without origin records or collaborator status', t => {
+  const responses = repairResponses();
   responses['repos/owner/repo/pulls/1'].user = { login: BOT, type: 'Bot' };
   const f = fixture(t, responses);
   const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'review', CODEX_TARGET: '1' });

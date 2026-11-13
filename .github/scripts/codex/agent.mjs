@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { BOT, ROOT, WORK, ARTIFACTS, CI_WORKFLOW, WORKER_WORKFLOW, gh, pages, command, json, save,
+import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, WORKER_WORKFLOW, gh, pages, command, json, save,
   output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment, dispatch,
   publicText, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
 import { repairBudget, humanRevisionAuthor, failureSignature, findingKey, changedLines } from './state.mjs';
@@ -21,9 +21,6 @@ function canWrite(repo, actor) {
   }
 }
 export function sameRepository(pr, repo) { return pr.head?.repo?.full_name === repo && pr.base?.repo?.full_name === repo; }
-export function optedIntoRepair(pr, history, ref) {
-  return (pr.user?.login === BOT && history.some(r => r.kind === 'origin' && r.branch === ref)) || pr.labels.some(l => l.name === 'codex-autofix');
-}
 function infoSummary(result) {
   return `${result.summary}\n\nInvestigated: ${result.investigated.join('; ') || 'See summary.'}\n\nTests:\n${result.tests.map(t => `- ${t.status}: ${t.command} — ${t.details}`).join('\n') || '- No tests were run.'}` +
     (result.unresolved.length ? `\n\nUnresolved:\n${result.unresolved.map(s => `- ${s}`).join('\n')}` : '');
@@ -61,7 +58,7 @@ async function request(mode) {
       !['opened', 'reopened', 'synchronize', 'ready_for_review'].includes(payload.action) ||
       payload.repository.full_name !== repo || payload.pull_request?.base?.repo?.full_name !== repo) throw new Error('Invalid trusted PR metadata event');
     const pr = prFor(repo, integer(payload.pull_request.number));
-    if (pr.state !== 'open' || !sameRepository(pr, repo) || pr.head.sha !== sha(payload.pull_request.head.sha)) return;
+    if (pr.state !== 'open' || pr.base?.repo?.full_name !== repo || pr.head.sha !== sha(payload.pull_request.head.sha)) return;
     dispatch(repo, 'review', pr.number, pr.head.sha);
   } else if (mode === 'repair') {
     const run = gh(`repos/${repo}/actions/runs/${integer(payload.workflow_run.id)}`);
@@ -102,20 +99,12 @@ async function prepare() {
   task.head_sha = sha(pr?.head.sha || gh(`repos/${repo}/commits/${encodeURIComponent(metadata.default_branch)}`).sha);
   if (pr && process.env.CODEX_EXPECTED_SHA && sha(process.env.CODEX_EXPECTED_SHA) !== task.head_sha) return;
   if (pr && pr.state !== 'open') return;
-  if (pr && !sameRepository(pr, repo)) {
-    notice(task, 'Fork PRs are not processed with subscription credentials. A maintainer must review this PR in a separate trusted environment.');
+  if (task.mode === 'repair' && pr && !sameRepository(pr, repo)) {
+    notice(task, 'Automatic repair cannot push to an external fork branch. Apply the PR review findings in the contributor repository.');
     return;
   }
   if (process.env.CODEX_AUTOMATION_ENABLED === 'false') { notice(task, 'Codex automation is disabled by the repository CODEX_AUTOMATION_ENABLED variable.'); return; }
   const comments = commentsFor(repo, task.number), history = records(comments);
-  // Visibility is irrelevant for this collaborator-only repository. Verify the
-  // actual author permission (or our bot provenance) without a manual approval.
-  const author = pr?.user || issue.user;
-  const ownPR = pr && author?.login === BOT && history.some(r => r.kind === 'origin' && r.branch === pr.head.ref);
-  if (!ownPR && (author?.type !== 'User' || !canWrite(repo, author.login))) {
-    notice(task, 'Automatic execution is limited to repository collaborators with write access and recorded Codex-created PRs.', 'author-policy');
-    return;
-  }
   task.history = history;
   task.context = { repository: repo, mode: task.mode, head_sha: task.head_sha,
     discussion: comments.slice(-6).map(c => ({ author: c.user?.login, body: bounded(c.body, 800) })),
@@ -128,7 +117,7 @@ async function prepare() {
       comment(repo, issue.number, { kind: 'issue', status: 'complete', pr: existing[0].number, run_id: task.run_id }, `This issue already has a pull request: ${existing[0].html_url}`);
       return;
     }
-    task.context.issue = { number: issue.number, title: bounded(issue.title, 500), body: bounded(issue.body, 16000), labels: issue.labels.map(l => l.name), author: issue.user.login };
+    task.context.issue = { number: issue.number, title: bounded(issue.title, 500), body: bounded(issue.body, 16000), author: issue.user.login };
   } else {
     task.branch = branch(pr.head.ref); task.base_branch = branch(pr.base.ref);
     const reviews = pages(`repos/${repo}/pulls/${pr.number}/reviews?per_page=100`);
@@ -152,9 +141,6 @@ async function prepare() {
       previous_inline_comments: inlineDiscussion.slice(-6).map(c => ({ author: c.user?.login, path: c.path, line: c.line, commit_id: c.commit_id, body: bounded(c.body, 800) })) };
     if (remaining <= 0 || files.some(f => (f.patch || '').length > 3000)) task.context.pr.diff_is_partial = true;
     if (task.mode === 'repair') {
-      if (!optedIntoRepair(pr, history, task.branch)) {
-        notice(task, 'CI failed. Human-authored PRs remain review-only unless a maintainer adds the codex-autofix label.', 'repair-policy'); return;
-      }
       const branchInfo = gh(`repos/${repo}/branches/${encodeURIComponent(task.branch)}`);
       if (task.branch === metadata.default_branch || branchInfo.protected) { notice(task, 'Automatic repair will not push to a protected or default branch.', 'repair-policy'); return; }
       let resetId = '';
@@ -185,7 +171,9 @@ async function prepare() {
     }
   }
   // Fetch only through the trusted checkout with a step-scoped job token.
-  command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1', `https://github.com/${repo}.git`, task.head_sha], { cwd: ROOT });
+  const fetchRef = pr && !sameRepository(pr, repo) ? `refs/pull/${integer(pr.number)}/head` : task.head_sha;
+  command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1', `https://github.com/${repo}.git`, fetchRef], { cwd: ROOT });
+  if (fetchRef !== task.head_sha && command('git', ['rev-parse', 'FETCH_HEAD'], { cwd: ROOT }).trim() !== task.head_sha) throw new Error('PR head changed during fetch; this review request is stale');
   save(taskFile, task);
   save(path.join(ARTIFACTS, 'task.json'), { mode: task.mode, number: task.number, head_sha: task.head_sha, run_id: task.run_id, ci_run_id: task.ci_run_id });
   output('proceed', 'true');
@@ -299,8 +287,7 @@ async function publish() {
   sha(commit);
   if (task.mode === 'repair') {
     const pr = prFor(task.repo, task.number), info = gh(`repos/${task.repo}/branches/${encodeURIComponent(task.branch)}`);
-    if (pr.state !== 'open' || !sameRepository(pr, task.repo) || pr.head.sha !== task.head_sha || pr.head.ref !== task.branch || info.protected || task.branch === task.default_branch ||
-      !optedIntoRepair(pr, records(commentsFor(task.repo, task.number)), task.branch)) throw new Error('PR head or repair authorization changed; stale changes will not be pushed');
+    if (pr.state !== 'open' || !sameRepository(pr, task.repo) || pr.head.sha !== task.head_sha || pr.head.ref !== task.branch || info.protected || task.branch === task.default_branch) throw new Error('PR head or branch protection changed; stale changes will not be pushed');
   } else {
     const remote = command('git', ['ls-remote', `https://github.com/${task.repo}.git`, `refs/heads/${task.branch}`], {
       env: cleanEnvironment({ GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' }),
@@ -321,7 +308,7 @@ async function publish() {
     } });
     prNumber = pr.number;
     comment(task.repo, prNumber, { kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id },
-      'Created by Codex automation. This repository-owned branch is opted into bounded automatic CI repair. A maintainer reviews and merges this PR.');
+      'Created by Codex automation. Failed CI automatically starts bounded repair on this repository-owned branch. A maintainer reviews and merges this PR.');
     comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) }, `Prepared ${pr.html_url}\n\n${summary}`, task.comment_id);
   } else {
     comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) }, `Pushed repair commit ${commit} (attempt ${task.record.attempt}/3).\n\n${summary}`, task.comment_id);

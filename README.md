@@ -28,9 +28,9 @@ _Note: See [How to Prevent Permissions Errors](https://docs.npmjs.com/getting-st
 
 Autonomous issue investigation, PR review and bounded CI repair are configured in
 GitHub Actions. See [.github/CODEX_AUTOMATION.md](.github/CODEX_AUTOMATION.md) for
-subscription credential setup, collaborator-only operation, security boundaries
-and tests. Collaborator issues and repository-owned PRs run automatically
-regardless of repository visibility.
+subscription credential setup, security boundaries and tests. All issues and PRs
+are investigated automatically regardless of creator or repository visibility.
+Failed CI starts repair on repository-owned feature branches automatically.
 
 Use Node 24 from `.nvmrc` (`nvm install && nvm use`). Install the locked dependencies
 and the single browser used by both test suites:

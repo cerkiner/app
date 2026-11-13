@@ -6,21 +6,22 @@ uses the Codex CLI with a ChatGPT subscription, GitHub CLI, repository secrets,
 comments, commits and short-lived diagnostic artifacts. There is no external
 service, database, Agents API or API-key billing fallback.
 
-## Collaborator-only operation
+## Automatic operation
 
-This repository is configured by its owner for collaborator-only issue and PR
-creation. It can execute automatically regardless of public/private visibility;
-there is no visibility gate, enable label, or manual approval step. The worker
-checks the author's actual repository write permission before restoring Codex
-credentials, and recognizes Codex-created PRs through their trusted bot provenance.
-Keep the repository's interaction restrictions configured for collaborators.
+Every new issue starts investigation and implementation when a code change is
+appropriate. Every new PR head receives a review regardless of its creator.
+Failed CI starts bounded repair automatically on repository-owned feature
+branches, for both human and bot PRs. No labels, tags, linked issue, author
+allowlist or repair opt-in are required or checked. Repository visibility does
+not affect eligibility. GitHub's repository interaction permissions remain under
+the owner's control.
 
 OpenAI's current [account-auth CI/CD guide](https://learn.chatgpt.com/docs/auth/ci-cd-auth)
 documents the advanced restore/refresh/persist pattern for trusted automation.
 This repository uses its owner's collaborator-only trust model, a dedicated
-serialized login and isolated repository tools. Fork PRs still receive a notice
-instead of subscription execution; repair only writes to authorized branches
-inside this repository. There is no API billing fallback.
+serialized login and isolated repository tools. Fork PRs receive read-only
+reviews through the base repository's PR head ref; repair only writes to
+authorized branches inside this repository. There is no API billing fallback.
 
 GitHub Free can run this on its standard Ubuntu runners within the account's
 applicable Actions allowance. Builds, tests, containers and
@@ -55,7 +56,7 @@ not publish anything. A later API or remote executor can implement this contract
 without replacing the issue/review/repair orchestration or enabling API billing
 in the current adapter.
 
-Issue investigations read the issue, labels, recent discussion and repository.
+Issue investigations read the issue, recent discussion and repository.
 Actionable changes become `codex/issue-N`, a commit, and a PR against the current
 default branch, using `Refs #N`. The issue gets the PR link and test summary.
 Non-coding/ambiguous requests get a findings comment and no commit or PR. An issue
@@ -129,21 +130,9 @@ The review body reports scope limits when the diff was truncated.
 5. Optionally set repository variable `CODEX_MODEL` to a model available to the
    subscription. If unset, the CLI selects its default. Setting
    `CODEX_AUTOMATION_ENABLED=false` disables execution and posts a notice. Do not
-   put tokens in variables. No enable label or manual issue trigger is required
-   after setup.
-6. Create label `codex-autofix` if human-authored PRs will opt into repair:
-
-   ```sh
-   gh label create codex-autofix --repo "$GH_REPO" \
-     --description 'Maintainer permits bounded Codex repair on this repository-owned PR branch' \
-     --color 1d76db
-   ```
-
-   Apply it only to repository-owned feature branches. Human PRs default to
-   review-only. A Codex-created PR gets a trusted bot provenance comment and is
-   eligible by default. Forks and protected/default branches are never repaired.
-7. Run the smoke scenarios below. A live successful CLI execution, refresh and
-   write-back need valid secrets and a collaborator-authored target; local tests
+   put tokens in variables. Events start work directly after setup.
+6. Run the smoke scenarios below. A live successful CLI execution, refresh and
+   write-back need valid secrets and an open issue/PR target; local tests
    cannot certify the current account, PAT or GitHub settings.
 
 ## Credential refresh, persistence and queue safety
@@ -197,9 +186,9 @@ or credential data.
 1. GitHub events contain identifiers, never shell-interpolated issue/PR text. The
    coordinator fetches current data through `gh`, validates repository, workflow
    path/name, event, branch and SHA, and checks policy before referencing secrets.
-   The author must have repository write access or be the recorded Codex PR bot.
-   Repository visibility does not determine eligibility. Comments and artifacts
-   from PR code never authorize credential release.
+   Investigation and review do not depend on author identity, labels or tags.
+   Repair requires an unprotected, repository-owned feature branch. Comments and
+   artifacts from PR code never authorize credential release.
 2. The trusted controller is checked out from the default branch. No PR workflow
    YAML, package lifecycle hook, test or source script executes on that host.
    The Codex CLI runs from a neutral directory with host shell, images, hooks,
@@ -226,7 +215,7 @@ or credential data.
    instruction, credential, test configuration, symlink and submodule edits,
    changes to package scripts, patches over 1 MiB, and over 80 changed files.
    Known credential patterns are rejected. Before repair push, ownership,
-   protection, opt-in and the exact head are checked again. The explicit
+   protection and the exact head are checked again. The explicit
    `--force-with-lease=ref:expectedSHA` is an atomic compare-and-swap: the new
    commit's parent is the original head, so the successful update is a fast
    forward. A human's concurrent change or branch recreation makes the push fail.
@@ -271,9 +260,8 @@ gh workflow run codex-agent.yml --repo "$GH_REPO" --ref master \
   -f mode=repair -f target=FAILING_CI_RUN_ID -f new_cycle=true
 ```
 
-Use the destination's default branch instead of `master` when different. A label
-change alone does not trigger repair; after opting in, rerun failed CI or dispatch
-its failure run ID. For a manual review or issue retry, dispatch `mode=review` or
+Use the destination's default branch instead of `master` when different. For a
+manual review or issue retry, dispatch `mode=review` or
 `mode=issue` with the PR/issue number. A completed issue is deliberately not
 reimplemented; create a follow-up issue for a genuinely new request.
 
@@ -341,7 +329,7 @@ node --test .github/scripts/codex/*.test.mjs
 
 It covers cycle continuity/exhaustion, crash reservations, new human revisions,
 forged comments, stale credentials, file auth restoration/rotation/cleanup, PAT
-failures, collaborator/fork policy, conflicted-PR dispatch, web-editor budget
+failures, unrestricted author handling, read-only fork review, conflicted-PR dispatch, web-editor budget
 resets, review comment publication, stale heads, tool
 restrictions, redaction, blocked edits, package-script protection, independent Git
 indexes, hooks, new files, and an actual local-Git concurrent push race.
@@ -369,16 +357,16 @@ the automation:
 | Open a small reproducible bug issue, no labels | Investigation, focused test/fix, issue branch, PR, linked issue summary and explicitly dispatched CI/review. |
 | Open a question or ambiguous issue | Findings/next-action comment; no branch, commit or PR. Redispatch does not duplicate completed work. |
 | Open/update a human PR with passing CI | Independent COMMENT review; no code changes, approval or merge. |
-| Open/update a PR with failing CI | Review still runs. Human branch remains untouched until opted in. |
+| Open/update a PR with failing CI | Review runs and failed CI starts repair on an eligible repository-owned branch automatically. |
 | Open/update a PR with merge conflicts | Trusted metadata dispatch starts the head review even when PR-context CI/signal workflows cannot run. |
-| Fail `CI` on a labeled same-repository feature branch | Durable attempt record, focused commit on the same branch and fresh CI run at the new SHA. |
-| Fail `CI` on a Codex-created PR | Same repair behavior without requiring a manual opt-in label. |
+| Fail `CI` on any same-repository feature branch | Durable attempt record, focused commit on the same branch and fresh CI run at the new SHA. |
+| Fail `CI` on a bot-created PR without provenance records | The same automatic repair behavior applies. |
 | Leave the failure unresolved through three attempts | No fourth execution; a human-intervention notice and CI run link. Bot commits do not reset the cycle. |
 | Push a new human revision, including a signed GitHub web edit | A new cycle is available; previous summaries remain visible. Bot repair SHAs keep their existing cycle. |
 | Report missing credentials/flaky infrastructure | Halt/report rather than repeatedly changing source. |
-| Update the branch or remove human opt-in during execution | Publication refuses the stale/unauthorized push. |
-| Open a collaborator issue or same-repository PR in a public copy | Execution proceeds automatically after the author permission check; no visibility approval is required. |
-| Submit a fork or an issue from a non-collaborator | Policy notice; no subscription credential restore or repository command execution. |
+| Update or protect the branch during execution | Publication refuses the stale/unauthorized push. |
+| Open an issue or PR in a public copy, as any creator | Investigation/review proceeds automatically without author or visibility approval. |
+| Submit a fork PR | Read-only review is published. Automatic repair never pushes to the external contributor branch. |
 | Queue several tasks, then let a normal CLI run refresh auth | Refreshed secret is stored; older queued snapshots redispatch before using it. |
 | Force a nonzero Codex exit after a refresh in a controlled test | Write-back still runs. Use only a dedicated test login; never edit/forge OAuth token contents to force refresh. |
 | Revoke the test PAT or login | Named auth/storage error, no API fallback, no credential artifacts. |
@@ -392,8 +380,8 @@ must confirm those with the destination's credentials.
 
 ## Troubleshooting and future work
 
-- **Only policy notices:** non-collaborator author, fork PR, disabled automation,
-  or protected repair branch. Visibility is not an execution restriction.
+- **Only policy notices:** disabled automation, protected repair branch, or an
+  attempted repair of an external branch. Reviews are not restricted by creator.
 - **No worker run:** workflows are absent from the default branch, Actions write
   is restricted, initial fork workflow awaits GitHub approval, or the 100-job queue
   filled. Inspect the request run and manually redispatch the missed target.
@@ -418,7 +406,7 @@ must confirm those with the destination's credentials.
   and Ubuntu-runner smoke tests. Do not change to an unpinned latest install.
 
 Potential improvements are an immutable prebuilt container image, stricter
-network egress, broader trusted-fork review support, separate publication jobs, safe orphan-branch recovery,
+network egress, separate publication jobs, safe orphan-branch recovery,
 durable queue recovery beyond 100 requests, richer failure fingerprints, a
 credential-persistence circuit breaker, and vetted session-data restoration.
 These require explicit design work; the current implementation favors bounded,
