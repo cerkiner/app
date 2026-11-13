@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
 
-import { CUSTOM_ELEMENTS_SCHEMA } from '@angular/core';
+import { provideRouter } from '@angular/router';
+import { IonicModule } from '@ionic/angular';
 
 import { AboutComponent } from './about.component';
 
@@ -11,9 +12,8 @@ describe('About', () => {
     beforeEach(waitForAsync(() => {
         TestBed.configureTestingModule({
             declarations: [AboutComponent],
-            // Shallow component test: Ionic elements are tested by Ionic itself.
-            schemas: [CUSTOM_ELEMENTS_SCHEMA],
-            errorOnUnknownElements: true
+            imports: [IonicModule.forRoot({ animated: false })],
+            providers: [provideRouter([])]
         })
             .compileComponents();
     }));

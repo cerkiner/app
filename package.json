@@ -9,7 +9,8 @@
     "start": "ng serve",
     "build": "ng build",
     "test": "ng test",
-    "e2e": "ng e2e"
+    "test:ci": "ng test --configuration=ci --browsers=ChromeHeadlessCI --watch=false",
+    "e2e": "playwright test"
   },
   "repository": {
     "type": "git",
@@ -57,19 +58,16 @@
     "@angular/language-service": "^21.0.8",
     "@ionic/angular-toolkit": "^12.3.0",
     "@ionic/lab": "^3.2.15",
+    "@playwright/test": "1.65.0",
     "@types/jasmine": "^5.1.4",
-    "@types/jasminewd2": "2.0.8",
     "@types/node": "^20.12.12",
     "jasmine-core": "~5.1.2",
-    "jasmine-spec-reporter": "~7.0.0",
     "karma": "~6.4.4",
     "karma-chrome-launcher": "~3.2.0",
     "karma-coverage-istanbul-reporter": "~3.0.2",
     "karma-jasmine": "~5.1.0",
     "karma-jasmine-html-reporter": "^2.1.0",
-    "protractor": "~7.0.0",
     "puppeteer": "^22.15.0",
-    "ts-node": "^10.9.2",
     "typescript": "~5.9.3"
   },
   "cordova": {

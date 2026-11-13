@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+    branches: [master]
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
@@ -15,7 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  validate:
+    name: Validate app
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -27,12 +29,25 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          check-latest: true
           cache: npm
       - name: Install dependencies from lockfile
         run: npm ci
+      - name: Install Chromium for unit and browser tests
+        run: npx playwright install --with-deps --no-shell chromium
+      - name: Share Chromium with Karma
+        run: node -e 'require("node:fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_BIN=" + require("@playwright/test").chromium.executablePath() + "\n")'
       - name: Build production application
         run: npm run build -- --configuration=production
       - name: Run unit tests in headless Chrome
-        env:
-          CHROME_BIN: /usr/bin/google-chrome
-        run: npm test -- --configuration=ci --browsers=ChromeHeadless --watch=false
+        run: npm run test:ci
+      - name: Check production rendering and interactions
+        run: npm run e2e
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: browser-failure-diagnostics
+          path: output/playwright/
+          if-no-files-found: ignore
+          retention-days: 7
