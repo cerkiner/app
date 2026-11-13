@@ -63,3 +63,6 @@ export class AppComponent implements OnInit {
     window.open(url, '_system');
   }
 }
+
+
+const codexAutomationSmokeValue: number = "deliberate type mismatch";
