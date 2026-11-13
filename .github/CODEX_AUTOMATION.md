@@ -202,8 +202,10 @@ or credential data.
    The workspace namespace is explicitly exposed as direct tools, including for
    model catalogs that request code-mode-only execution. The code-mode host stays
    disabled; repository tools do not depend on its discovery/execution path.
-   Only the trusted bridge's four tools have automatic approval; their operations
-   remain confined to the container and review's restricted tool set.
+   Only the trusted bridge's four tools use `approval_mode="approve"`; Codex's
+   `auto` mode can still require an interactive prompt for unannotated MCP tools.
+   Their operations remain confined to the container and review's restricted
+   tool set; the overall interactive approval policy remains `never`.
 3. Repository files are exported without host Git metadata into a Docker
    container. It has no auth mount, PAT, GitHub token, Docker socket, host PID
    namespace or elevated capabilities. The root filesystem is read-only, with
@@ -339,7 +341,9 @@ resets, review comment publication, stale heads, tool
 restrictions, redaction, blocked edits, package-script protection, independent Git
 indexes, hooks, new files, and an actual local-Git concurrent push race.
 An optional contract test also starts the actual pinned CLI against a local mock
-endpoint, with an empty temporary auth home and no external inference calls:
+endpoint, with an empty temporary auth home and no external inference calls.
+It verifies direct tool exposure and executes every isolated tool through an inert
+Docker substitute, proving that interactive approval is not required:
 
 ```sh
 CODEX_CLI_BIN=/absolute/path/to/pinned/codex node --test .github/scripts/codex/cli-contract.test.mjs

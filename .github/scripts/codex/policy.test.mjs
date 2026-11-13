@@ -88,6 +88,7 @@ test('Codex controller has no native shell, image, hooks, plugins or child agent
   assert.ok(args.includes('default_permissions="controller"'));
   assert.ok(args.includes('features.code_mode={"enabled"=false,"direct_only_tool_namespaces"=["mcp__workspace"]}'));
   assert.ok(args.includes('features.code_mode_host=false'));
+  for (const name of ['workspace', 'list_files', 'read_file', 'search']) assert.ok(args.includes(`mcp_servers.workspace.tools.${name}.approval_mode="approve"`));
   assert.ok(args.some(a => a.startsWith('permissions=') && a.includes('credentials"="deny"') && a.includes('"/proc"="deny"')));
   assert.ok(args.includes('--ignore-user-config') && args.includes('--ignore-rules') && args.includes('--ephemeral'));
   process.env.CODEX_AUTH_JSON_B64 = 'fake-test-secret'; process.env.GH_TOKEN = 'fake-test-token';
