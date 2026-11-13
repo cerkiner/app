@@ -69,3 +69,7 @@ test('supports profile navigation and mobile menus', async ({ page, isMobile }) 
   await expect(page.locator('.about-info')).toBeVisible();
   await expect(page).toHaveURL(/\/app\/(?:#\/)?$/);
 });
+
+test('temporary negative control for the required merge check', () => {
+  expect(true, 'Intentional failure: verify GitHub blocks merging').toBe(false);
+});
