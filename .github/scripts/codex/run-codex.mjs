@@ -18,7 +18,7 @@ function toml(value) {
 }
 export function containerArgs(name, workspace, review) {
   return ['run', '-d', '--name', name, '--cap-drop=ALL', '--security-opt=no-new-privileges',
-    '--pids-limit=256', '--memory=6g', '--cpus=2', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=1g',
+    '--pids-limit=256', '--memory=6g', '--cpus=2', '--read-only', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=1g',
     '--user', `${process.getuid()}:${process.getgid()}`, '--network', review ? 'none' : 'bridge',
     '--mount', `type=bind,source=${workspace},target=/workspace${review ? ',readonly' : ''}`, 'codex-workspace:local'];
 }

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, WORKER_WORKFLOW, gh, pages, command, json, save,
   output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment, dispatch,
   publicText, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
+import { trustedWorkflowTree, startPublishedWorkflows } from './checks.mjs';
 import { repairBudget, humanRevisionAuthor, failureSignature, findingKey, changedLines } from './state.mjs';
 
 const taskFile = path.join(WORK, 'task.json');
@@ -224,7 +225,11 @@ export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   const message = `${subject}\n\n${bounded(result.summary, 1800)}\n\nRefs #${task.number}\nCodex-Automation: ${task.mode}\n${task.budget ? `Codex-Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
   return git(['-c', 'commit.gpgsign=false', 'commit-tree', tree, '-p', task.head_sha], { input: message }).trim();
 }
-export function nextRuns(task, prNumber, head, api = gh, queueReview = dispatch) {
+export function nextRuns(task, prNumber, head, api = gh, queueReview = dispatch, startEvents = false) {
+  if (startEvents && startPublishedWorkflows(task, prNumber, head, api)) {
+    queueReview(task.repo, 'review', prNumber, head);
+    return;
+  }
   // GITHUB_TOKEN pushes cannot be relied upon to trigger downstream workflows.
   // Dispatch is supported with that token and a pinned branch/SHA check in CI.
   const endpoint = `repos/${task.repo}/actions/workflows/${CI_WORKFLOW}/dispatches`;
@@ -315,7 +320,7 @@ async function publish() {
   }
   // A dispatch failure fails visibly; the reserved attempt and output SHA remain
   // durable. It never triggers another implementation merely to retry dispatch.
-  nextRuns(task, prNumber, commit);
+  nextRuns(task, prNumber, commit, gh, dispatch, trustedWorkflowTree(commit));
 }
 async function reportFailure() {
   if (!existsSync(taskFile)) return;
