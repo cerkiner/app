@@ -1,0 +1,41 @@
+name: Codex PR review request
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+# The PR-context signal has no permissions. The target-context dispatcher checks
+# out only trusted default-branch orchestration and passes metadata to the worker;
+# it never checks out PR code or receives subscription credentials or GH_PAT.
+permissions: {}
+
+jobs:
+  request:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Request independent review
+        run: echo 'The trusted Codex worker will inspect this PR when this request completes.'
+  dispatch:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Dispatch review from trusted PR metadata, including merge conflicts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node .github/scripts/codex/agent.mjs request review
