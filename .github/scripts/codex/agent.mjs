@@ -110,7 +110,7 @@ async function prepare() {
     discussion: comments.slice(-6).map(c => ({ author: c.user?.login, body: bounded(c.body, 800) })),
     previous_attempts: history.filter(r => ['repair', 'issue'].includes(r.kind)).slice(-3) };
   if (issue) {
-    if (history.some(r => r.kind === 'issue' && r.status === 'complete')) return;
+    if (history.some(r => r.kind === 'issue' && r.status === 'complete' && r.outcome !== 'external_failure')) return;
     task.branch = `codex/issue-${issue.number}`;
     const existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':' + task.branch)}&per_page=100`);
     if (existing.length) {
@@ -274,7 +274,7 @@ async function publish() {
     return;
   }
   if (result.outcome !== 'changes') {
-    const status = task.mode === 'repair' ? 'halted' : 'complete';
+    const status = task.mode === 'repair' ? 'halted' : result.outcome === 'external_failure' ? 'failed' : 'complete';
     comment(task.repo, task.number, { ...task.record, status, outcome: result.outcome, summary: bounded(result.summary, 1500) }, summary, task.comment_id);
     return;
   }

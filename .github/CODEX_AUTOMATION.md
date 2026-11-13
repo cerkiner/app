@@ -199,6 +199,11 @@ or credential data.
    from the trusted workspace MCP bridge. Native apply_patch cannot write under
    this read-only policy. This policy is tied to the pinned CLI's tool behavior;
    review it before upgrading the CLI or enabling additional tools.
+   The workspace namespace is explicitly exposed as direct tools, including for
+   model catalogs that request code-mode-only execution. The code-mode host stays
+   disabled; repository tools do not depend on its discovery/execution path.
+   Only the trusted bridge's four tools have automatic approval; their operations
+   remain confined to the container and review's restricted tool set.
 3. Repository files are exported without host Git metadata into a Docker
    container. It has no auth mount, PAT, GitHub token, Docker socket, host PID
    namespace or elevated capabilities. The root filesystem is read-only, with
