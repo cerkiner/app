@@ -60,6 +60,6 @@ export class AppComponent implements OnInit {
 
 
   openUrl(url: string) {
-    window.open(url.trim().toLowerCase(), '_system');
+    window.open(url.trim(), '_system');
   }
 }
