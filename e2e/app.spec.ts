@@ -57,9 +57,14 @@ test('supports profile navigation and mobile menus', async ({ page, isMobile }) 
       await expect(menu.getByText(label, { exact: true })).toBeVisible();
       const viewport = page.viewportSize()!;
       // The links menu is RTL, so its physical side can differ from "end".
-      const panel = await menu.locator('[part="container"]').boundingBox();
-      expect(panel).not.toBeNull();
-      await page.mouse.click(panel!.x < 1 ? viewport.width - 8 : 8, viewport.height / 2);
+      const panelLeft = await menu.evaluate(element => {
+        // Query only the menu's shadow root: Ionic 9 items also expose a
+        // container part inside their own shadow roots.
+        const panel = element.shadowRoot?.querySelector('[part="container"]');
+        if (!panel) throw new Error('The menu panel did not render');
+        return panel.getBoundingClientRect().left;
+      });
+      await page.mouse.click(panelLeft < 1 ? viewport.width - 8 : 8, viewport.height / 2);
       await expect(menu).not.toHaveClass(/show-menu/);
     }
     await page.locator('ion-menu-button[menu="start"]').click();

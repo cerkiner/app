@@ -1,0 +1,67 @@
+name: Hostinger release
+
+on:
+  workflow_call:
+    inputs:
+      run_id:
+        required: true
+        type: string
+      automatic:
+        type: boolean
+        default: false
+      check_only:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://sam.erkiner.com/app/
+    concurrency:
+      group: hostinger-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve and download validated build
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.run_id }}
+          RELEASE_AUTOMATIC: ${{ inputs.automatic }}
+        run: python3 .github/scripts/deploy/release.py
+      - name: Check connection or publish retained build
+        if: steps.release.outputs.skip != 'true'
+        env:
+          HOSTINGER_FTP_HOST: ${{ secrets.HOSTINGER_FTP_HOST }}
+          HOSTINGER_FTP_USERNAME: ${{ secrets.HOSTINGER_FTP_USERNAME }}
+          HOSTINGER_FTP_PASSWORD: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
+          HOSTINGER_FTP_PORT: ${{ secrets.HOSTINGER_FTP_PORT || '21' }}
+          RELEASE_CHECK_ONLY: ${{ inputs.check_only }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: python3 .github/scripts/deploy/ftps.py
+      - name: Record result
+        if: always()
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+          RELEASE_STATUS: ${{ job.status }}
+          RELEASE_SKIP: ${{ steps.release.outputs.skip }}
+          RELEASE_CHECK_ONLY: ${{ inputs.check_only }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('Hostinger production\n\n')
+              for key in ('RELEASE_SHA', 'RELEASE_STATUS', 'RELEASE_SKIP', 'RELEASE_CHECK_ONLY'):
+                  summary.write(f"- {key}: {os.environ[key]}\n")
+              summary.write('- URL: https://sam.erkiner.com/app/\n')
+          PYTHON

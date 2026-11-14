@@ -1,7 +1,7 @@
 import { provideRouter, RouterModule } from '@angular/router';
 import { SwUpdate } from '@angular/service-worker';
 import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
-import { IonicModule, Platform } from '@ionic/angular';
+import { IonicModule, Platform } from '@ionic/angular/lazy';
 import { SplashScreen } from '@awesome-cordova-plugins/splash-screen/ngx';
 import { StatusBar } from '@awesome-cordova-plugins/status-bar/ngx';
 import { EMPTY } from 'rxjs';

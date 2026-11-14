@@ -21,8 +21,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || inputs.pr_number || format('{0}-{1}', github.event_name, github.ref) }}
+  # Never cancel a production upload when a newer master push arrives.
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   validate:
@@ -49,6 +50,8 @@ jobs:
         run: npm ci
       - name: Validate autonomous agent policy and orchestration
         run: node --test .github/scripts/codex/*.test.mjs
+      - name: Validate deployment safety
+        run: python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'
       - name: Install Chromium for unit and browser tests
         run: npx playwright install --with-deps --no-shell chromium
       - name: Share Chromium with Karma
@@ -59,6 +62,15 @@ jobs:
         run: npm run test:ci
       - name: Check production rendering and interactions
         run: npm run e2e
+      - name: Retain validated production build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: production-${{ github.sha }}
+          path: app/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
       - name: Upload browser failure diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -67,3 +79,15 @@ jobs:
           path: output/playwright/
           if-no-files-found: ignore
           retention-days: 7
+
+  deploy:
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/hostinger-release.yml
+    with:
+      run_id: ${{ github.run_id }}
+      automatic: true
+    secrets: inherit

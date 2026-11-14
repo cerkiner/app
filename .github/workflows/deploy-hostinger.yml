@@ -1,0 +1,26 @@
+name: Deploy Hostinger manually
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: CI run ID containing a validated master production build
+        required: true
+        type: string
+      check_only:
+        description: Check encrypted connection and folder only (no uploads)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/master'
+    uses: ./.github/workflows/hostinger-release.yml
+    with:
+      run_id: ${{ inputs.run_id }}
+      check_only: ${{ inputs.check_only }}
+    secrets: inherit

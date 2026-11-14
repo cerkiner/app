@@ -1,0 +1,9 @@
+{
+  "domain": "erkiner.com",
+  "username": "u845409551",
+  "type": "static",
+  "directory": "app",
+  "public_url": "https://sam.erkiner.com/app/",
+  "deployment_method": "file-upload",
+  "shared_document_root": true
+}
