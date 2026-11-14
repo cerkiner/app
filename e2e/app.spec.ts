@@ -32,9 +32,10 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('renders the biography and a loaded profile photo', async ({ page }) => {
+  await expect(page).toHaveTitle('Sam Erkiner');
   await expect(page.locator('.about-info')).toBeVisible();
   await expect(page.locator('.about-info')).toContainText(/software engineer/i);
-  const photo = page.getByAltText('Photo of Celilsemi Sam Erkiner');
+  const photo = page.getByAltText('Photo of Sam Erkiner');
   await expect(photo).toBeVisible();
   await expect.poll(() => photo.evaluate((image: HTMLImageElement) =>
     image.complete && image.naturalWidth > 0
@@ -70,7 +71,7 @@ test('supports profile navigation and mobile menus', async ({ page, isMobile }) 
     await page.locator('ion-menu-button[menu="start"]').click();
   }
   await expect(profile.getByText('Sydney, Australia', { exact: true })).toBeVisible();
-  await profile.getByText('Celilsemi Sam Erkiner', { exact: true }).click();
+  await profile.getByText('Sam Erkiner', { exact: true }).click();
   await expect(page.locator('.about-info')).toBeVisible();
   await expect(page).toHaveURL(/\/app\/(?:#\/)?$/);
 });
