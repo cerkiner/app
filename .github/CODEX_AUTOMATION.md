@@ -86,7 +86,8 @@ fresh context.
 
 The publisher, rather than model prose, generates every comment heading and
 layout. Visible messages contain a short summary, **Checks**, **Next**, and run,
-commit or PR links. Failure reasons stay visible and short. Investigation notes,
+commit or PR links. Checks use stable ordering; combined setup/test commands keep
+their test results, and setup failures remain visible. Failure reasons stay visible and short. Investigation notes,
 full check results, paths, workflow names and identifiers are inside collapsed
 **Technical details**. Machine state remains in escaped HTML comment markers.
 Issue progress is updated in place; each bounded repair attempt updates its own

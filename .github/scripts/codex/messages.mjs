@@ -15,27 +15,34 @@ export const HEADINGS = Object.freeze({
 });
 const html = value => redactor()(publicText(value)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 function text(value, length = 240) {
-  return bounded(html(value).replace(/\s+/g, ' ').replace(/(?:[a-f0-9]{40}|\b(?:CI|Codex trusted worker) run \d+\b)/g, 'the reviewed revision')
-    .replace(/(?:\.?[\w-]+\/)+[\w.\/-]+/g, 'the affected file').replace(/([*_[\]`#])/g, '\\$1'), length);
+  const formatted = html(value).replace(/\s+/g, ' ').replace(/(?:[a-f0-9]{40}|\b(?:CI|Codex trusted worker) run \d+\b)/g, 'the reviewed revision')
+    .replace(/(^|[\s('"`])(?:\.github|src|tests?|e2e|output|\.codex|\/workspace|\/tmp|\/home|\/Users)\/[\w.\/-]+/g, '$1the affected file')
+    .replace(/([*_[\]`#])/g, '\\$1');
+  if (formatted.length <= length) return formatted;
+  return formatted.slice(0, length - 1).replace(/\s+\S*$/, '').replace(/\\$/, '') + '…';
 }
-function group(test) {
-  if (/\b(?:e2e|playwright|browser)\b/i.test(test.command) && !/install/.test(test.command)) return 'browser tests';
-  if (/\b(?:test:ci|karma|unit|ng test)\b/i.test(test.command)) return 'unit tests';
-  if (/\b(?:build|ng build)\b/i.test(test.command)) return 'build';
-  return 'validation';
+function groups(test) {
+  const command = test.command, names = [];
+  if (/\bbuild\b/i.test(command)) names.push('build');
+  if (/\b(?:test:ci|karma|unit)\b|ng\s+test|node\s+--test|npm\s+(?:run\s+)?test(?=\s|$)/i.test(command)) names.push('unit tests');
+  if (/\b(?:e2e|browser)\b|playwright\s+test/i.test(command)) names.push('browser tests');
+  return names.length ? names : /\bnpm\s+(?:ci|install)\b|\bplaywright\s+install\b/i.test(command) ? ['setup'] : ['validation'];
 }
 export function checkSummary(tests = [], { review = false, pending = false } = {}) {
   if (pending) return 'not run yet';
   if (review) return 'static review only · tests not run';
   const buckets = new Map();
-  for (const test of tests) {
-    if (/^(?:PUPPETEER_SKIP_DOWNLOAD=true\s+)?(?:npm ci|npx playwright install)/.test(test.command)) continue;
-    const key = group(test), previous = buckets.get(key);
+  for (const test of tests) for (const key of groups(test)) {
+    if (key === 'setup' && test.status === 'passed') continue;
+    const previous = buckets.get(key);
     if (!previous || ({ passed: 0, not_run: 1, failed: 2 }[test.status] > { passed: 0, not_run: 1, failed: 2 }[previous.status])) buckets.set(key, test);
   }
   if (!buckets.size) return 'not run';
-  return [...buckets].map(([name, test]) => name + (test.status === 'passed' ? ' ✓' : test.status === 'failed' ? ' ✗' : ' not run') +
-    (test.status !== 'passed' && test.details ? ' — ' + text(test.details.split(/\n|(?<=[.!?])\s/)[0], 85) : '')).join(' · ');
+  return ['setup', 'build', 'unit tests', 'browser tests', 'validation'].filter(name => buckets.has(name)).map(name => {
+    const test = buckets.get(name);
+    return name + (test.status === 'passed' ? ' ✓' : test.status === 'failed' ? ' ✗' : ' not run') +
+      (test.status !== 'passed' && test.details ? ' — ' + text(test.details.split(/\n|(?<=[.!?])\s/)[0], 85) : '');
+  }).join(' · ');
 }
 function details(task, result, extra) {
   const lines = [];
