@@ -44,6 +44,16 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelectorAll('ion-menu').length).toBe(2);
   });
 
+  it('should trim external URLs while preserving their casing and system target', () => {
+    const open = spyOn(window, 'open');
+
+    fixture.componentInstance.openUrl(' \t https://example.com/Report?token=AbC#SectionA \n');
+
+    expect(open).toHaveBeenCalledOnceWith(
+      'https://example.com/Report?token=AbC#SectionA', '_system'
+    );
+  });
+
   it('should initialize the app', async () => {
     expect(platform.ready).toHaveBeenCalled();
     await platformReady;
