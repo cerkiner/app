@@ -1,20 +1,159 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["outcome", "title", "summary", "investigated", "tests", "unresolved", "findings"],
+  "required": [
+    "outcome",
+    "title",
+    "summary",
+    "investigated",
+    "tests",
+    "unresolved",
+    "findings",
+    "review_status",
+    "finding_verifications"
+  ],
   "properties": {
-    "outcome": {"type": "string", "enum": ["changes", "no_change", "needs_info", "external_failure", "review"]},
-    "title": {"type": "string"},
-    "summary": {"type": "string"},
-    "investigated": {"type": "array", "items": {"type": "string"}},
-    "tests": {"type": "array", "items": {
-      "type": "object", "additionalProperties": false, "required": ["command", "status", "details"],
-      "properties": {"command": {"type": "string"}, "status": {"enum": ["passed", "failed", "not_run"], "type": "string"}, "details": {"type": "string"}}
-    }},
-    "unresolved": {"type": "array", "items": {"type": "string"}},
-    "findings": {"type": "array", "items": {
-      "type": "object", "additionalProperties": false, "required": ["priority", "title", "body", "path", "line"],
-      "properties": {"priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]}, "title": {"type": "string"}, "body": {"type": "string"}, "path": {"type": "string"}, "line": {"type": "integer"}}
-    }}
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "changes",
+        "no_change",
+        "needs_info",
+        "external_failure",
+        "review"
+      ]
+    },
+    "title": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "investigated": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command",
+          "status",
+          "details"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_run"
+            ],
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "priority",
+          "title",
+          "body",
+          "path",
+          "line",
+          "actionable",
+          "previous_key"
+        ],
+        "properties": {
+          "priority": {
+            "type": "string",
+            "enum": [
+              "P0",
+              "P1",
+              "P2",
+              "P3"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "actionable": {
+            "type": "boolean"
+          },
+          "previous_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "review_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "incomplete",
+        "not_applicable"
+      ]
+    },
+    "finding_verifications": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_key",
+          "status",
+          "explanation"
+        ],
+        "properties": {
+          "finding_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "verified_fixed",
+              "incorrect",
+              "not_reproduced",
+              "already_resolved",
+              "blocked"
+            ]
+          },
+          "explanation": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

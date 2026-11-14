@@ -11,6 +11,17 @@ export function parseResult(text, mode, redact = redactor()) {
   catch { throw new Error('Codex returned invalid JSON; result contents were withheld from logs.'); }
   return validateResult(redactValue(result, redact), mode);
 }
+export function enforceReviewCompletion(result, mode, audit, files = []) {
+  if (mode !== 'review') return result;
+  const readSource = audit.some(item => item.tool === 'read_file' && item.success && !item.optional_instruction &&
+    (!files.length || files.includes((item.path || '').replace(/^\.\//, ''))));
+  const failed = audit.some(item => !item.success && !item.optional_instruction);
+  if (!readSource || failed) {
+    result.review_status = 'incomplete';
+    result.unresolved.push(!readSource ? 'Relevant repository source could not be read through the isolated tools.' : 'A repository tool operation failed; complete review coverage was not established.');
+  }
+  return validateResult(result, mode);
+}
 function toml(value) {
   if (Array.isArray(value)) return `[${value.map(toml).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)}=${toml(item)}`).join(',')}}`;
@@ -42,7 +53,7 @@ export function cliArgs(controller, container, mode, model = '') {
     'features.skill_search': false, 'features.tool_suggest': false, 'features.workspace_dependencies': false,
     'skills.bundled.enabled': false, 'skills.include_instructions': false,
     'mcp_servers.workspace.command': process.execPath,
-    'mcp_servers.workspace.args': [path.join(ROOT, '.github/scripts/codex/sandbox-mcp.mjs'), '--serve', container, mode],
+    'mcp_servers.workspace.args': [path.join(ROOT, '.github/scripts/codex/sandbox-mcp.mjs'), '--serve', container, mode, path.join(controller, 'tool-audit.jsonl')],
     'mcp_servers.workspace.env_vars': [], 'mcp_servers.workspace.required': true,
     'mcp_servers.workspace.tool_timeout_sec': 190,
     // Codex's auto mode still prompts for unannotated tools. Only these trusted
@@ -124,7 +135,9 @@ async function main() {
       run_id: task.run_id, cli_version: CODEX_VERSION, exit_code: execution.code, timed_out: execution.timedOut,
       thread_id: events.find(e => e.type === 'thread.started')?.thread_id || null, session_persisted: false });
     if (execution.code !== 0 || execution.timedOut) throw new Error('Codex failed or timed out. Check subscription login, usage limits and CLI compatibility; no API billing fallback was attempted.');
-    const result = parseResult(readFileSync(path.join(controller, 'result.json'), 'utf8'), task.mode, redact);
+    const audit = existsSync(path.join(controller, 'tool-audit.jsonl')) ? readFileSync(path.join(controller, 'tool-audit.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+    const result = enforceReviewCompletion(parseResult(readFileSync(path.join(controller, 'result.json'), 'utf8'), task.mode, redact), task.mode, audit, (task.files || []).map(f => f.filename));
+    save(path.join(ARTIFACTS, 'tool-coverage.json'), { reads: audit.filter(item => item.tool === 'read_file' && item.success).length, failed_operations: audit.filter(item => !item.success && !item.optional_instruction).length });
     save(path.join(ARTIFACTS, 'result.json'), result);
     console.log('Codex execution completed; sanitized results are ready for validation.');
   } catch (error) {

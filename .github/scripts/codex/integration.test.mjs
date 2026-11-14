@@ -7,36 +7,8 @@ import os from 'node:os';
 import { buildCommit, pushArguments } from './agent.mjs';
 import { marker, BOT } from './lib.mjs';
 
-const scripts = import.meta.dirname;
-function fixture(t, responses = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'codex-agent-test-'));
-  t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const bin = path.join(dir, 'bin'), work = path.join(dir, 'work');
-  mkdirSync(bin); mkdirSync(work);
-  writeFileSync(path.join(dir, 'responses.json'), JSON.stringify(responses));
-  writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
-const fs = require('node:fs'); const root = ${JSON.stringify(dir)}; const args = process.argv.slice(2);
-let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', c => input += c); process.stdin.on('end', () => {
-fs.appendFileSync(root + '/calls.jsonl', JSON.stringify({args, input}) + '\\n');
-if (args[0] === 'secret' && args[1] === 'set') { fs.writeFileSync(root + '/saved-secret', input); return; }
-const endpoint = args.find(a => a.startsWith('repos/')); const responses = JSON.parse(fs.readFileSync(root + '/responses.json', 'utf8'));
-if (!(endpoint in responses)) { process.stderr.write('Unexpected API endpoint: ' + endpoint); process.exitCode = 1; return; }
-let value = responses[endpoint]; if (args.includes('--slurp')) value = [value];
-process.stdout.write(JSON.stringify(value));
-});`, { mode: 0o755 });
-  writeFileSync(path.join(bin, 'git'), `#!/usr/bin/env node
-const fs=require('node:fs');const args=process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(dir + '/git-calls.jsonl')},JSON.stringify(args)+'\\n');
-if(args.includes('fetch')) process.exitCode=0;
-else if(args[0]==='rev-parse' && args[1]==='FETCH_HEAD') process.stdout.write(process.env.FIXTURE_FETCHED_SHA || 'a'.repeat(40));
-else process.exitCode=23;
-`, { mode: 0o755 });
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURE: dir, CODEX_WORK: work, GH_REPO: 'owner/repo', GH_TOKEN: 'test-pat',
-    GITHUB_RUN_ID: '50', GITHUB_SERVER_URL: 'https://github.com', CODEX_MODE: 'issue', CODEX_TARGET: '1', GITHUB_EVENT_NAME: 'workflow_dispatch' };
-  const run = (script, action, extra = {}, args = []) => spawnSync(process.execPath, [path.join(scripts, script), action, ...args], { env: { ...env, ...extra }, encoding: 'utf8', input: '', timeout: 10000 });
-  const calls = () => existsSync(path.join(dir, 'calls.jsonl')) ? readFileSync(path.join(dir, 'calls.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) : [];
-  return { dir, work, env, run, calls };
-}
+import { fixture, repairResponses } from './fixtures.mjs';
+
 const a = 'a'.repeat(40), b = 'b'.repeat(40);
 const auth = { auth_mode: 'chatgpt', tokens: { access_token: 'test-access-value-123', refresh_token: 'test-refresh-value-456', id_token: 'test-id-value-789' }, last_refresh: '2026-11-01T00:00:00Z' };
 test('auth restores on a fresh runner, writes the actual rotated file via stdin, then erases it', t => {
@@ -170,7 +142,7 @@ test('a non-coding issue result publishes findings without Git operations or a P
   writeFileSync(path.join(f.work, 'task.json'), JSON.stringify({ mode: 'issue', repo: 'owner/repo', number: 1, run_id: 50,
     comment_id: 101, record: { kind: 'issue', status: 'started', run_id: 50 } }));
   mkdirSync(path.join(f.work, 'artifacts'));
-  writeFileSync(path.join(f.work, 'artifacts/result.json'), JSON.stringify({ outcome: 'needs_info', title: 'Clarify behavior',
+  writeFileSync(path.join(f.work, 'artifacts/result.json'), JSON.stringify({ outcome: 'needs_info', review_status: 'not_applicable', finding_verifications: [], title: 'Clarify behavior',
     summary: 'Please provide reproduction steps.', investigated: ['README'], tests: [], unresolved: ['Expected behavior is unclear.'], findings: [] }));
   const run = f.run('agent.mjs', 'publish');
   assert.equal(run.status, 0, run.stderr);
@@ -178,28 +150,6 @@ test('a non-coding issue result publishes findings without Git operations or a P
   assert.equal(existsSync(path.join(f.dir, 'git-calls.jsonl')), false);
   assert.ok(!f.calls().some(c => c.args.some(a => /\/pulls/.test(a))));
 });
-function repairResponses(history = [], { head = a, protectedBranch = false } = {}) {
-  return {
-    'repos/owner/repo': { visibility: 'private', default_branch: 'master' },
-    'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z', path: '.github/workflows/codex-agent.yml', event: 'workflow_dispatch', actor: { login: 'maintainer', type: 'User' } },
-    'repos/owner/repo/actions/runs/123': { id: 123, run_attempt: 1, repository: { full_name: 'owner/repo' },
-      head_repository: { full_name: 'owner/repo' }, head_sha: head, name: 'CI', path: '.github/workflows/CI.yml', status: 'completed',
-      conclusion: 'failure', event: 'pull_request', pull_requests: [{ number: 1 }], html_url: 'https://github.com/owner/repo/actions/runs/123' },
-    'repos/owner/repo/pulls/1': { number: 1, state: 'open', title: 'Fix', body: '', user: { login: 'maintainer', type: 'User' },
-      head: { sha: head, ref: 'feature', repo: { full_name: 'owner/repo' } }, base: { sha: a, ref: 'master', repo: { full_name: 'owner/repo' } } },
-    'repos/owner/repo/issues/1/comments?per_page=100': history.map((r, i) => ({ id: 100 + i, user: { login: BOT, type: 'Bot' }, body: marker(r) })),
-    'repos/owner/repo/pulls/1/reviews?per_page=100': [],
-    'repos/owner/repo/pulls/1/files?per_page=100': [{ filename: 'source.txt', patch: '@@ -1 +1 @@\n-old\n+new' }],
-    'repos/owner/repo/pulls/1/comments?per_page=100': [],
-    'repos/owner/repo/pulls/1/commits?per_page=100': [{ sha: head, commit: { message: 'Fix' } }],
-    'repos/owner/repo/branches/feature': { protected: protectedBranch },
-    [`repos/owner/repo/commits/${head}`]: { committer: { login: 'maintainer', type: 'User' } },
-    'repos/owner/repo/collaborators/maintainer/permission': { permission: 'write' },
-    'repos/owner/repo/actions/runs/123/attempts/1/jobs?per_page=100': { jobs: [{ name: 'Validate app', conclusion: 'failure', steps: [{ name: 'Run tests', conclusion: 'failure' }] }] },
-    'repos/owner/repo/issues/1/comments': { id: 101 },
-    'repos/owner/repo/issues/comments/101': { id: 101 },
-  };
-}
 test('any repository-owned failed PR reserves repair automatically without metadata or provenance', t => {
   const f = fixture(t, repairResponses());
   const run = f.run('agent.mjs', 'prepare', { CODEX_MODE: 'repair', CODEX_TARGET: '123' });
@@ -312,8 +262,8 @@ test('review publishes a COMMENT with validated lines and never approves', t => 
     context: { pr: {} }, files: [{ filename: 'src/a.ts', patch: '@@ -1 +1 @@\n-old\n+new' }] };
   writeFileSync(path.join(f.work, 'task.json'), JSON.stringify(task));
   mkdirSync(path.join(f.work, 'artifacts'));
-  writeFileSync(path.join(f.work, 'artifacts/result.json'), JSON.stringify({ outcome: 'review', title: 'Review', summary: 'One correctness defect.', investigated: ['src/a.ts'], tests: [], unresolved: [],
-    findings: [{ path: 'src/a.ts', line: 1, priority: 'P1', title: 'Handle missing value', body: 'The new path dereferences undefined.' }] }));
+  writeFileSync(path.join(f.work, 'artifacts/result.json'), JSON.stringify({ outcome: 'review', review_status: 'complete', finding_verifications: [], title: 'Review', summary: 'One correctness defect.', investigated: ['src/a.ts'], tests: [], unresolved: [],
+    findings: [{ path: 'src/a.ts', line: 1, priority: 'P1', actionable: false, previous_key: null, title: 'Handle missing value', body: 'The new path dereferences undefined.' }] }));
   const run = f.run('agent.mjs', 'publish');
   assert.equal(run.status, 0, run.stderr);
   const review = JSON.parse(f.calls().at(-1).input);
@@ -323,7 +273,7 @@ test('review skips publishing when a human has updated the head concurrently', t
   const f = fixture(t, { 'repos/owner/repo/pulls/1': { head: { sha: b }, state: 'open' } });
   writeFileSync(path.join(f.work, 'task.json'), JSON.stringify({ mode: 'review', repo: 'owner/repo', number: 1, head_sha: a }));
   mkdirSync(path.join(f.work, 'artifacts'));
-  writeFileSync(path.join(f.work, 'artifacts/result.json'), JSON.stringify({ outcome: 'review', title: 'Review', summary: 'No findings', investigated: [], tests: [], unresolved: [], findings: [] }));
+  writeFileSync(path.join(f.work, 'artifacts/result.json'), JSON.stringify({ outcome: 'review', review_status: 'complete', finding_verifications: [], title: 'Review', summary: 'No findings', investigated: [], tests: [], unresolved: [], findings: [] }));
   const run = f.run('agent.mjs', 'publish');
   assert.equal(run.status, 0, run.stderr); assert.equal(f.calls().length, 1);
 });
@@ -354,6 +304,14 @@ test('publishing uses a separate trusted Git index, adds new files, and never ru
   assert.equal(f.git(['show', `${commit}:new.txt`]), 'new');
   assert.equal(f.git(['rev-parse', `${commit}^`]), f.task.head_sha);
   assert.equal(existsSync(path.join(f.dir, 'pwned')), false);
+});
+test('review repairs require a real regression test change in the published patch', t => {
+  const f = localRepo(t); f.task.review_findings = [{ key: 'a'.repeat(20) }];
+  writeFileSync(path.join(f.work, 'workspace/source.txt'), 'fixed\n');
+  assert.throws(() => buildCommit(f.task, { title: 'Fix', summary: 'Focused fix' }, f), /regression coverage/);
+  writeFileSync(path.join(f.work, 'workspace/source.spec.ts'), 'regression fixture\n');
+  const commit = buildCommit(f.task, { title: 'Fix', summary: 'Focused fix' }, f);
+  assert.equal(f.git(['show', commit + ':source.spec.ts']), 'regression fixture');
 });
 test('publishing rejects attempts to disable tests through package scripts', t => {
   const f = localRepo(t);

@@ -1,4 +1,5 @@
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 // This is trusted host code. Commands are passed as Docker argv, never evaluated
@@ -59,6 +60,14 @@ if (process.argv[2] === '--serve') {
   };
   for await (const line of createInterface({ input: process.stdin })) {
     if (line.length > 100000) continue;
-    try { const response = handle(JSON.parse(line), review, run); if (response) process.stdout.write(JSON.stringify(response) + '\n'); } catch { /* malformed transport input has no authority */ }
+    try {
+      const request = JSON.parse(line), response = handle(request, review, run);
+      if (request.method === 'tools/call' && process.argv[5]) {
+        const content = response?.result?.content?.[0]?.text || '';
+        const success = !response?.result?.isError && !response?.error && (!/^exit=(?!0(?:\n|$))/.test(content) || (request.params?.name === 'search' && /^exit=1(?:\n|$)/.test(content)));
+        appendFileSync(process.argv[5], JSON.stringify({ tool: request.params?.name, path: request.params?.arguments?.path, success, optional_instruction: /(?:^|\/)AGENTS\.md$/.test(request.params?.arguments?.path || '') }) + '\n');
+      }
+      if (response) process.stdout.write(JSON.stringify(response) + '\n');
+    } catch { /* malformed transport input has no authority */ }
   }
 }

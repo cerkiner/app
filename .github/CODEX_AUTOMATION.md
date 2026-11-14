@@ -1,7 +1,8 @@
 # Autonomous Codex development in GitHub Actions
 
 This implementation investigates new issues, independently reviews new PR heads,
-and repairs eligible failing `CI` runs, with no automatic PR approval or merge. It
+and repairs eligible failed `CI` runs or significant actionable review findings,
+with no automatic PR approval or merge. It
 uses the Codex CLI with a ChatGPT subscription, GitHub CLI, repository secrets,
 comments, commits and short-lived diagnostic artifacts. There is no external
 service, database, Agents API or API-key billing fallback.
@@ -10,8 +11,9 @@ service, database, Agents API or API-key billing fallback.
 
 Every new issue starts investigation and implementation when a code change is
 appropriate. Every new PR head receives a review regardless of its creator.
-Failed CI starts bounded repair automatically on repository-owned feature
-branches, for both human and bot PRs. No labels, tags, linked issue, author
+Failed CI or actionable P0/P1/P2 review findings start bounded repair on
+repository-owned feature branches, for both human and bot PRs. Green CI does not
+prevent review-triggered repair. Optional P3 suggestions remain feedback. No labels, tags, linked issue, author
 allowlist or repair opt-in are required or checked. Repository visibility does
 not affect eligibility. GitHub's repository interaction permissions remain under
 the owner's control.
@@ -38,6 +40,8 @@ secrets and paid environment protection features are not required.
 | `workflows/codex-repair.yml` | A failed completed `CI` run dispatches a repair investigation. |
 | `workflows/codex-agent.yml` | Trusted default-branch worker; also handles completion of the PR review signal. |
 | `scripts/codex/agent.mjs` | Context collection, provenance, eligibility, attempt reservations, validated commits, reviews, comments and downstream dispatch. |
+| `scripts/codex/messages.mjs` | Central agent identities, stage headings, concise checks/next steps, and collapsed technical details. |
+| `scripts/codex/reviews.mjs` | Authenticated structured review records, request validation and direct repair dispatch. |
 | `scripts/codex/checks.mjs` | Start exact, trusted bot-generated PR workflow runs; controlled dispatch remains the fallback. |
 | `scripts/codex/state.mjs` | Retry cycles, secret freshness, finding deduplication and diff-line mapping. |
 | `scripts/codex/auth.mjs` | Restore, validate, persist and erase subscription credentials. |
@@ -75,18 +79,63 @@ with a completed bot record or an existing issue-branch PR is not implemented
 again. Failed or incomplete investigations can be redispatched by a maintainer.
 PRs with reported failing tests or no passing tests are opened as drafts.
 
-Reviews run independently in a fresh context even when CI is green, failing, or
-blocked by merge conflicts. The metadata-only `pull_request_target` path dispatches
-the exact PR head directly, since GitHub does not run `pull_request` workflows
-for conflicted PRs. It never checks out or executes PR code. The normal PR signal
-remains as a second event path; the serialized worker deduplicates reviews by SHA.
-They include PR requirements, diffs, commit descriptions, linked issues, recent
-discussion and previous reviews. Review publication always uses `COMMENT`, never
-`APPROVE` or automatic merge. Findings use exact right-side diff lines when
-possible; otherwise file/line references appear in the body. P0/P1 indicate
-blocking severity but do not themselves change GitHub review state. A repeated
-head is skipped, and previously published finding fingerprints are suppressed.
-The review body reports scope limits when the diff was truncated.
+The three consistent identities are **Codex Issue Agent**, **Codex Review
+Agent**, and **Codex Repair Agent**. Investigation and implementation are stages
+of the same Issue Agent execution. Review always starts independently with a
+fresh context.
+
+The publisher, rather than model prose, generates every comment heading and
+layout. Visible messages contain a short summary, **Checks**, **Next**, and run,
+commit or PR links. Failure reasons stay visible and short. Investigation notes,
+full check results, paths, workflow names and identifiers are inside collapsed
+**Technical details**. Machine state remains in escaped HTML comment markers.
+Issue progress is updated in place; each bounded repair attempt updates its own
+progress comment so historical attempt records remain available.
+
+| Agent/stage | Visible heading |
+| --- | --- |
+| Issue investigation and implementation | 🔎 Codex Issue Agent — Investigating |
+| Issue PR ready | 🛠️ Codex Issue Agent — Pull request prepared |
+| Issue findings/no coding | 💬 Codex Issue Agent — Findings reported |
+| Complete review without significant defects | 👀 Codex Review Agent — No significant issues found |
+| Review with material defects | 👀 Codex Review Agent — Changes needed |
+| Incomplete review | 👀 Codex Review Agent — Review incomplete |
+| CI repair starts | 🔧 Codex Repair Agent — Investigating CI failure · Attempt N/3 |
+| Review repair starts | 🔧 Codex Repair Agent — Investigating review findings · Attempt N/3 |
+| Repair published | 🔧 Codex Repair Agent — Fix pushed · Attempt N/3 |
+| Blocked/disputed repair | 🛑 Codex Repair Agent — Human input needed |
+| Shared budget exhausted | 🛑 Codex Repair Agent — Retry limit reached |
+
+Reviews run regardless of CI status or merge conflicts. The metadata-only
+`pull_request_target` path dispatches the exact PR head, since GitHub does not run
+`pull_request` workflows for conflicted PRs. It never checks out or executes PR
+code. The normal PR signal remains a second event path; the serialized worker
+deduplicates by SHA. Publication always uses `COMMENT`, never `APPROVE` or merge.
+Review execution only lists, reads and searches files; it never runs PR code.
+
+Results explicitly state `review_status`: complete, incomplete or not_applicable.
+Missing relevant source access, failed repository tool operations or a partial
+diff force an incomplete review, which cannot use the clean heading. Known
+findings are still reevaluated on subsequent revisions. Stable keys and explicit
+previous-key references prevent repeated inline comments; unresolved findings
+remain eligible for repair even when previously published.
+
+After publishing a review, the coordinator directly dispatches the same trusted
+worker with `mode=repair`, `repair_source=review`, the PR number, exact reviewed
+SHA, review identifier and structured actionable findings. There is no general
+PR-comment/activity listener. The worker fetches the actual GitHub review,
+verifies its bot-authored state and commit, and rejects supplied findings that
+differ from that record. Actionable P0/P1/P2 defects qualify; optional suggestions
+never qualify. A credible actionable finding can be verified even when the
+broader review has an explicitly reported scope limitation.
+
+The Repair Agent independently reproduces each finding, adds or updates a
+regression test, demonstrates its pre-fix failure, applies the focused fix, and
+checks that the regression passes. Each finding receives a structured verdict:
+verified_fixed, incorrect, not_reproduced, already_resolved or blocked. Incorrect
+or unreproduced findings receive an explanation and stop that finding's path for
+the cycle. They do not block unrelated CI repair. Publication rejects a claimed
+review fix without passing regression verification or a changed test file.
 
 ## Repository setup
 
@@ -257,15 +306,27 @@ Bot comments have a `<!-- codex-agent:v1 {...} -->` record. Only records authore
 `github-actions[bot]` with GitHub's Bot account type count as machine state.
 An issue/PR author cannot forge ownership or attempt counters by copying a marker.
 Recent discussion and bounded bot summaries are supplied to each fresh session;
-full history is not copied into every prompt.
+full history is not copied into every prompt. Visible comments are concise;
+structured state retains source, request keys, review identifiers and per-finding
+verification without exposing machine metadata in the rendered message.
 
 Repair reservations count **before** execution, including crashes, auth/setup
 failures after reservation, and unsuccessful fixes. Records contain input/output
 SHA, cycle, attempt, failed workflow ID/attempt, failure fingerprint, run URL and
 result summary. The output SHA is saved **before** pushing. Thus a repair commit
 inherits its cycle and cannot reset the limit of three attempts. The same CI run
-attempt is not repaired twice. Infrastructure/non-code/ambiguous outcomes halt
-that cycle. A newly failing run after attempt three posts the exhaustion notice.
+attempt or review request is not reserved twice. CI and review repairs share the
+same three-attempt cycle; bot commits never replenish it. The worker includes
+current actionable review findings in CI repair, and an already failed exact-head
+CI run in review repair. One execution can address both. Queued requests for a
+revision superseded by a fix are skipped before execution.
+
+Infrastructure/non-code outcomes stop the affected trigger path. Incorrect,
+unreproduced, already-resolved or blocked findings stop that finding's path for
+the cycle; other sources retain the remaining shared budget. A new request after
+attempt three posts the human-intervention notice without a fourth Codex repair
+execution. A separate immediate head check runs after credential restore and
+before Codex; publication checks again and retains the atomic push lease.
 
 A different head resets automatically for a repository writer's commit. For
 verified GitHub web-editor commits, `web-flow` is the service committer, so the
@@ -292,36 +353,56 @@ runner requires the session data, not just the ID. A future adapter can restore 
 vetted allowlist of session data, fall back to summaries, and still keep auth out
 of artifacts. Resuming may consume prior-context resources and is not free usage.
 
-## CI retriggering and checks
+## CI retriggering, review dispatch and manual recovery
 
-The worker pushes using `GITHUB_TOKEN` and explicitly dispatches `CI.yml` at the
-same PR branch, with PR number and expected head SHA. CI validates the dispatched
-SHA and uses the PR number as its concurrency key. It also dispatches the trusted
-worker for an independent review of that exact new head. Duplicate native PR
-events are harmless because reviews are deduplicated by SHA.
+After an issue implementation or repair is pushed, the coordinator waits a
+bounded time for native bot-created PR workflow runs. It starts only the matching
+CI and review signal runs for the exact repository, PR, branch and SHA, and only
+when their workflow tree matches the trusted default-branch checkout. This
+approves workflow **execution**, never a PR review or merge. The existing
+short-lived Actions-write token is sufficient; no extra secret is required.
 
-An older feature branch may have the original inputless `workflow_dispatch`
-definition. If GitHub rejects the new inputs with HTTP 422 (no run was started),
-the worker dispatches CI once without inputs. That older definition lacks the
-new expected-SHA/concurrency inputs, but repair still requires the completed run
-to match the PR's exact current head. Rebase branches onto the updated default
-to get the full dispatch guards. Network/permission errors do not cause blind
-dispatch retries.
+When native events are unavailable or workflow definitions differ, the fallback
+explicitly dispatches `CI.yml` at the PR branch with PR number and expected SHA.
+CI rejects superseded dispatches and uses the PR number as its concurrency key.
+The coordinator independently dispatches review of the exact new head. Native
+and explicit review requests are harmless duplicates because publication is
+tracked by SHA. Older branches that reject optional dispatch inputs with HTTP
+422 are dispatched once without inputs; other API errors are not blindly retried.
+Update old feature branches from the default branch for the current guards.
 
-GitHub's [triggering documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)
-guarantees `workflow_dispatch` even when `GITHUB_TOKEN` events would suppress
-ordinary push workflows or require approval for bot PR events. The existing
-`CI` workflow builds production, runs Karma and Playwright, and now also tests the
-automation policies. Each failed dispatched CI run is associated with an open
-PR by exact head SHA and commit/PR API association; ambiguous associations stop.
-If a required check is configured to accept only PR merge-ref checks rather than
-branch-head checks, adjust that repository rule or manually approve its native
-PR CI run. The worker never bypasses branch rules or merges.
+GitHub's [token event documentation](https://docs.github.com/en/actions/concepts/security/github_token)
+explains held bot PR workflows and supported explicit dispatch. The configured
+`CI` workflow builds production, runs Karma and Playwright, and tests automation
+policies. Other workflow/check names do not independently start CI repair.
+Review findings do start repair even when all CI checks are green.
+
+For a review repair, `target` is the PR number, not a CI run ID. A maintainer can
+retry a published review explicitly (set new_cycle only to request a fresh
+bounded budget):
+
+```sh
+gh workflow run codex-agent.yml --repo "$GH_REPO" --ref master \
+  -f mode=repair -f repair_source=review -f target=PR_NUMBER \
+  -f expected_sha=REVIEWED_SHA -f review_id=REVIEW_ID -f new_cycle=true
+```
+
+The structured findings input is always passed by the automatic coordinator.
+For manual recovery it can be omitted: the trusted published review is fetched
+and validated. Supply `repair_source=ci` (the default) and a failing run ID for CI
+repair. Stale-auth redispatch preserves source, review ID and structured findings.
+Duplicate review signals can recover a missing repair dispatch from the existing
+published record without another model review. Executions deduplicate durable
+request keys before reserving an attempt.
+
+Comments and issue edits provide context but do not themselves trigger execution.
+New issue events, PR events, completed failed CI and these controlled dispatches
+are the orchestration inputs. The worker never bypasses branch rules or merges.
 
 ## Diagnostics and limits
 
 Artifacts retain seven days of structured results, optional sanitized failed-CI
-excerpts, restricted JSONL lifecycle/usage events, CLI version, session ID, head
+excerpts, restricted JSONL lifecycle/usage events, tool coverage counts, CLI version, session ID, head
 SHA, target and workflow run ID. Command output, reasoning, full transcripts,
 auth files, environment dumps, session databases and patches are **not** uploaded.
 Known seed and refreshed token values are redacted before a result is saved;
@@ -377,7 +458,11 @@ the automation:
 | --- | --- |
 | Open a small reproducible bug issue, no labels | Investigation, focused test/fix, issue branch, PR, linked issue summary and explicitly dispatched CI/review. |
 | Open a question or ambiguous issue | Findings/next-action comment; no branch, commit or PR. Redispatch does not duplicate completed work. |
-| Open/update a human PR with passing CI | Independent COMMENT review; no code changes, approval or merge. |
+| Open/update a human PR with passing CI | Independent COMMENT review. Actionable defects start verified repair; optional suggestions remain feedback. |
+| Review finds a genuine logic defect missed by CI | Direct review-to-repair dispatch, failing-then-passing regression, same-branch fix, fresh CI and independent review. |
+| A reported finding is incorrect or cannot be reproduced | Explain the evidence, stop that finding path, and preserve the remaining shared budget for other failures. |
+| A review cannot inspect relevant source or has a partial diff | Explicit Review incomplete result; never a clean heading. |
+| CI and review both request repair of one SHA | One combined context where possible, durable request deduplication, and at most three shared attempts. |
 | Open/update a PR with failing CI | Review runs and failed CI starts repair on an eligible repository-owned branch automatically. |
 | Open/update a PR with merge conflicts | Trusted metadata dispatch starts the head review even when PR-context CI/signal workflows cannot run. |
 | Fail `CI` on any same-repository feature branch | Durable attempt record, focused commit on the same branch and fresh CI run at the new SHA. |
