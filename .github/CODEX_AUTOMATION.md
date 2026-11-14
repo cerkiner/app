@@ -356,7 +356,9 @@ of artifacts. Resuming may consume prior-context resources and is not free usage
 ## CI retriggering, review dispatch and manual recovery
 
 After an issue implementation or repair is pushed, the coordinator waits a
-bounded time for native bot-created PR workflow runs. It starts only the matching
+bounded time for native bot-created PR workflow runs. GitHub PR-head metadata
+may briefly lag behind an atomic push: polling tolerates only the exact pre-push
+head until it catches the published SHA. Any third revision stops authorization. It starts only the matching
 CI and review signal runs for the exact repository, PR, branch and SHA, and only
 when their workflow tree matches the trusted default-branch checkout. This
 approves workflow **execution**, never a PR review or merge. The existing

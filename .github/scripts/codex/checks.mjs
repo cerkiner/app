@@ -20,7 +20,15 @@ export function startPublishedWorkflows(task, prNumber, head, api = gh, wait = p
   // Bound the wait; older event behavior falls back to explicit dispatch.
   for (let attempt = 0; attempt < 8; attempt++) {
     const pr = api(`repos/${repo}/pulls/${number}`);
-    if (pr.state !== 'open' || pr.head?.repo?.full_name !== repo || pr.head.sha !== revision || pr.head.ref !== ref) return false;
+    if (pr.state !== 'open' || pr.head?.repo?.full_name !== repo || pr.head.ref !== ref) return false;
+    if (pr.head.sha !== revision) {
+      // The push is atomic, but GitHub's PR metadata can lag behind the ref.
+      // Wait only for the exact pre-push revision; a third SHA is concurrent
+      // work and must never be authorized as this published revision.
+      if (pr.head.sha !== task.head_sha || attempt === 7) return false;
+      wait(1500);
+      continue;
+    }
     runs = (api(`repos/${repo}/actions/runs?event=pull_request&head_sha=${revision}&per_page=100`).workflow_runs || []).filter(isPublishedRun);
     if (paths.size === new Set(runs.map(run => run.path)).size || attempt === 7) break;
     wait(1500);
