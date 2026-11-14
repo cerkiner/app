@@ -118,7 +118,7 @@ test('redaction removes seed and rotated tokens, common token formats and bearer
   assert.ok(redact('{"refresh_token":"top-secret-value"}').includes('[REDACTED]'));
 });
 test('result redaction preserves JSON quoting, escapes, nested strings and schema fields', () => {
-  const input = { outcome: 'changes', title: 'Handle quoted input',
+  const input = { outcome: 'changes', review_status: 'not_applicable', finding_verifications: [], title: 'Handle quoted input',
     summary: 'Use password="example" and C:\\temp\\file\nThen test an escaped quote: "value".',
     investigated: ['password="example"'], unresolved: ['refresh_token=example'],
     tests: [{ command: 'printf \'password="example"\'', status: 'passed', details: 'rotated-token-123456' }], findings: [] };
@@ -141,10 +141,10 @@ test('inline review findings use actual added right-side lines', () => {
   assert.equal(findingKey({ path: 'a.ts', line: 3, title: ' A defect ' }), findingKey({ path: 'a.ts', line: 3, title: 'a defect' }));
 });
 test('malformed or mode-conflicting model results fail closed', () => {
-  const result = { outcome: 'changes', title: 'Fix', summary: 'Fixed', investigated: [], tests: [], unresolved: [], findings: [] };
+  const result = { outcome: 'changes', review_status: 'not_applicable', finding_verifications: [], title: 'Fix', summary: 'Fixed', investigated: [], tests: [], unresolved: [], findings: [] };
   assert.throws(() => validateResult(result, 'review'));
   assert.throws(() => validateResult({ ...result, tests: [{ command: 'x', status: 'green', details: '' }] }, 'issue'));
-  assert.throws(() => validateResult({ ...result, findings: [{ priority: 'P1', title: 'x', body: 'x', path: '../auth.json', line: 2 }] }, 'issue'));
+  assert.throws(() => validateResult({ ...result, findings: [{ priority: 'P1', actionable: false, previous_key: null, title: 'x', body: 'x', path: '../auth.json', line: 2 }] }, 'issue'));
 });
 test('CI is explicitly dispatched for older feature branches without new workflow inputs', () => {
   const calls = [], reviews = [];

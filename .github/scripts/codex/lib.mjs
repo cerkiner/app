@@ -60,7 +60,10 @@ export function gh(endpoint, { method = 'GET', body, paginate = false, raw = fal
   return raw ? text : text.trim() ? JSON.parse(text) : null;
 }
 export const pages = endpoint => gh(endpoint, { paginate: true }).flat();
-export function marker(record) { return `<!-- codex-agent:v1 ${JSON.stringify(record)} -->`; }
+export function marker(record) {
+  const encoded = JSON.stringify(record).replace(/[<>&]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+  return `<!-- codex-agent:v1 ${encoded} -->`;
+}
 export function recordFrom(comment) {
   if (comment.user?.login !== BOT || comment.user?.type !== 'Bot') return null;
   const match = (comment.body || '').match(/<!-- codex-agent:v1 (\{[^\n]*\}) -->/);
@@ -75,12 +78,14 @@ export function comment(repo, number, record, text, id) {
 export function publicText(value) {
   return bounded(value, 24000).replace(/<!--[\s\S]*?-->/g, '').replace(/@(?=[A-Za-z0-9_])/g, '@\u200b');
 }
-export function dispatch(repo, mode, target, expectedSha = '', hops = 0, newCycle = false, cycleRequest = '') {
+export function dispatch(repo, mode, target, expectedSha = '', hops = 0, newCycle = false, cycleRequest = '', repair = {}) {
   if (!['issue', 'review', 'repair'].includes(mode)) throw new Error('Invalid task mode');
   gh(`repos/${repo}/actions/workflows/${WORKER_WORKFLOW}/dispatches`, {
     method: 'POST', body: { ref: process.env.CODEX_DEFAULT_BRANCH || 'master', inputs: {
       mode, target: String(integer(target)), expected_sha: expectedSha ? sha(expectedSha) : '',
       refresh_hops: String(hops), new_cycle: String(newCycle), cycle_request: cycleRequest ? String(integer(cycleRequest)) : '',
+      ...(repair.source ? { repair_source: repair.source } : {}),
+      ...(repair.review_id ? { review_id: String(integer(repair.review_id)), review_findings: JSON.stringify(repair.findings || []) } : {}),
     } },
   });
 }
@@ -123,7 +128,11 @@ export function validateChanges(entries) {
 export function validateResult(result, mode) {
   if (!result || !['changes', 'no_change', 'needs_info', 'external_failure', 'review'].includes(result.outcome) ||
       typeof result.summary !== 'string' || !Array.isArray(result.investigated) || !Array.isArray(result.tests) ||
-      !Array.isArray(result.unresolved) || !Array.isArray(result.findings) || typeof result.title !== 'string') throw new Error('Invalid Codex result');
+      !Array.isArray(result.unresolved) || !Array.isArray(result.findings) || !Array.isArray(result.finding_verifications) ||
+      !['complete', 'incomplete', 'not_applicable'].includes(result.review_status) || typeof result.title !== 'string') throw new Error('Invalid Codex result');
+  if ((mode === 'review') !== (result.review_status !== 'not_applicable')) throw new Error('Invalid review completion status');
+  if (mode === 'review' && result.review_status === 'incomplete' && !result.unresolved.length) throw new Error('Incomplete reviews must explain their limits');
+  if (mode !== 'repair' && result.finding_verifications.length) throw new Error('Only repair verifies findings');
   if ((mode === 'review') !== (result.outcome === 'review')) throw new Error('Codex returned an outcome inconsistent with its task');
   if (![result.investigated, result.unresolved].every(items => items.every(item => typeof item === 'string'))) throw new Error('Invalid Codex summary items');
   for (const test of result.tests) {
@@ -131,7 +140,16 @@ export function validateResult(result, mode) {
   }
   for (const finding of result.findings) {
     if (!safeFile(finding.path) || !Number.isSafeInteger(finding.line) || finding.line < 1 ||
-        !['P0', 'P1', 'P2', 'P3'].includes(finding.priority) || typeof finding.title !== 'string' || typeof finding.body !== 'string') throw new Error('Invalid review finding');
+        !['P0', 'P1', 'P2', 'P3'].includes(finding.priority) || typeof finding.actionable !== 'boolean' ||
+        !(finding.previous_key === null || /^[a-f0-9]{20}$/.test(finding.previous_key)) ||
+        (finding.priority === 'P3' && finding.actionable) || typeof finding.title !== 'string' || finding.title.length > 240 || typeof finding.body !== 'string' || finding.body.length > 2400) throw new Error('Invalid review finding');
+  }
+  const verified = new Set();
+  for (const item of result.finding_verifications) {
+    if (!/^[a-f0-9]{20}$/.test(item.finding_key) || verified.has(item.finding_key) ||
+        !['verified_fixed', 'incorrect', 'not_reproduced', 'already_resolved', 'blocked'].includes(item.status) ||
+        typeof item.explanation !== 'string' || !item.explanation.trim()) throw new Error('Invalid finding verification');
+    verified.add(item.finding_key);
   }
   if (Buffer.byteLength(JSON.stringify(result)) > 48000 || result.findings.length > 20) throw new Error('Codex result exceeds limits');
   return result;

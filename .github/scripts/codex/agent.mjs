@@ -4,7 +4,9 @@ import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, WORKER_WORKFLOW, gh, pages, command
   output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment, dispatch,
   publicText, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
 import { trustedWorkflowTree, startPublishedWorkflows } from './checks.mjs';
-import { repairBudget, humanRevisionAuthor, failureSignature, findingKey, changedLines } from './state.mjs';
+import { repairBudget, humanRevisionAuthor, failureSignature, findingKey, changedLines, canonicalFindings, actionableFindings, remainingFindings, repairRequestSeen, validateRepairVerification } from './state.mjs';
+import { renderMessage, renderFinding, reviewStage } from './messages.mjs';
+import { publishedReview, previousFindings, latestReview, validateReviewRequest, requestReviewRepair } from './reviews.mjs';
 
 const taskFile = path.join(WORK, 'task.json');
 const event = () => json(process.env.GITHUB_EVENT_PATH);
@@ -22,14 +24,15 @@ function canWrite(repo, actor) {
   }
 }
 export function sameRepository(pr, repo) { return pr.head?.repo?.full_name === repo && pr.base?.repo?.full_name === repo; }
-function infoSummary(result) {
-  return `${result.summary}\n\nInvestigated: ${result.investigated.join('; ') || 'See summary.'}\n\nTests:\n${result.tests.map(t => `- ${t.status}: ${t.command} — ${t.details}`).join('\n') || '- No tests were run.'}` +
-    (result.unresolved.length ? `\n\nUnresolved:\n${result.unresolved.map(s => `- ${s}`).join('\n')}` : '');
+function message(task, stage, summary, options = {}) {
+  return renderMessage({ task, stage, summary, ...options });
 }
-function notice(task, text, kind = 'notice') {
+function notice(task, text, kind = 'notice', extra = '') {
   const history = records(commentsFor(task.repo, task.number));
   if (!history.some(r => r.kind === kind && r.head_sha === task.head_sha && r.message === text)) {
-    comment(task.repo, task.number, { kind, head_sha: task.head_sha, message: text, run_id: task.run_id }, `${text}\n\n[Workflow run](${runUrl(task)}).`);
+    const stage = task.mode === 'repair' ? kind === 'repair-limit' ? 'repair_limit' : 'repair_human' : task.mode === 'review' ? 'review_incomplete' : 'issue_findings';
+    comment(task.repo, task.number, { kind, head_sha: task.head_sha, message: text, run_id: task.run_id },
+      message(task, stage, text, { next: 'Review the explanation and provide the missing information or access.', extra }));
   }
   output('proceed', 'false');
 }
@@ -73,9 +76,10 @@ async function prepare() {
   process.env.CODEX_DEFAULT_BRANCH = metadata.default_branch;
   const currentRun = gh(`repos/${repo}/actions/runs/${integer(process.env.GITHUB_RUN_ID)}`);
   const task = { repo, run_id: currentRun.id, created_at: currentRun.created_at, default_branch: branch(metadata.default_branch),
-    mode: process.env.CODEX_MODE, target: integer(process.env.CODEX_TARGET), new_cycle: process.env.CODEX_NEW_CYCLE === 'true' };
+    mode: process.env.CODEX_MODE, target: integer(process.env.CODEX_TARGET), repair_source: process.env.CODEX_REPAIR_SOURCE || 'ci', new_cycle: process.env.CODEX_NEW_CYCLE === 'true' };
   if (!['issue', 'review', 'repair'].includes(task.mode)) throw new Error('Unknown task mode');
-  let issue, pr, ci;
+  if (task.mode === 'repair' && !['ci', 'review'].includes(task.repair_source)) throw new Error('Invalid repair source');
+  let issue, pr, ci, sourceReview;
   if (process.env.GITHUB_EVENT_NAME === 'workflow_run') {
     const source = gh(`repos/${repo}/actions/runs/${task.target}`);
     verifyRun(source, repo, 'codex-review.yml', 'Codex PR review request');
@@ -84,6 +88,13 @@ async function prepare() {
     for (const extra of prs.slice(1)) dispatch(repo, 'review', extra.number, extra.head.sha);
     if (!prs.length) return;
     pr = prs[0]; task.target = pr.number;
+  } else if (task.mode === 'repair' && task.repair_source === 'review') {
+    if (!process.env.CODEX_EXPECTED_SHA) throw new Error('Review repair requires the exact reviewed SHA');
+    pr = prFor(repo, task.target);
+    task.review_id = integer(process.env.CODEX_REVIEW_ID);
+    sourceReview = gh(`repos/${repo}/pulls/${pr.number}/reviews/${task.review_id}`);
+    task.requested_findings = validateReviewRequest(sourceReview, sha(process.env.CODEX_EXPECTED_SHA), process.env.CODEX_REVIEW_FINDINGS).findings;
+    if (!task.requested_findings.length) return;
   } else if (task.mode === 'repair') {
     ci = gh(`repos/${repo}/actions/runs/${task.target}`);
     verifyRun(ci, repo, CI_WORKFLOW, 'CI');
@@ -108,25 +119,33 @@ async function prepare() {
   const comments = commentsFor(repo, task.number), history = records(comments);
   task.history = history;
   task.context = { repository: repo, mode: task.mode, head_sha: task.head_sha,
-    discussion: comments.slice(-6).map(c => ({ author: c.user?.login, body: bounded(c.body, 800) })),
-    previous_attempts: history.filter(r => ['repair', 'issue'].includes(r.kind)).slice(-3) };
+    discussion: comments.slice(-6).map(c => ({ author: c.user?.login, body: bounded(publicText(c.body), 800) })),
+    previous_attempts: history.filter(r => ['repair', 'issue'].includes(r.kind)).slice(-3).map(r => ({ kind: r.kind, source: r.source, cycle: r.cycle, attempt: r.attempt, input_sha: r.input_sha, output_sha: r.output_sha, summary: r.summary, finding_verifications: (r.finding_verifications || []).map(v => ({ ...v, explanation: bounded(v.explanation, 300) })) })) };
   if (issue) {
     if (history.some(r => r.kind === 'issue' && r.status === 'complete' && r.outcome !== 'external_failure')) return;
     task.branch = `codex/issue-${issue.number}`;
     const existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':' + task.branch)}&per_page=100`);
     if (existing.length) {
-      comment(repo, issue.number, { kind: 'issue', status: 'complete', pr: existing[0].number, run_id: task.run_id }, `This issue already has a pull request: ${existing[0].html_url}`);
+      comment(repo, issue.number, { kind: 'issue', status: 'complete', pr: existing[0].number, run_id: task.run_id }, message(task, 'issue_pr', 'This issue already has a prepared pull request.', { pr: existing[0].number, next: 'Continue review on the existing PR.' }));
       return;
     }
     task.context.issue = { number: issue.number, title: bounded(issue.title, 500), body: bounded(issue.body, 16000), author: issue.user.login };
   } else {
     task.branch = branch(pr.head.ref); task.base_branch = branch(pr.base.ref);
     const reviews = pages(`repos/${repo}/pulls/${pr.number}/reviews?per_page=100`);
-    if (task.mode === 'review' && reviews.some(r => recordFrom(r)?.kind === 'review' && recordFrom(r)?.head_sha === task.head_sha)) return;
+    if (task.mode === 'review') {
+      const existingReview = reviews.filter(r => recordFrom(r)?.kind === 'review' && recordFrom(r)?.head_sha === task.head_sha).at(-1);
+      if (existingReview) {
+        const record = publishedReview(existingReview, task.head_sha);
+        if (record) requestReviewRepair(task, existingReview, record, dispatch, gh);
+        return;
+      }
+    }
     const files = pages(`repos/${repo}/pulls/${pr.number}/files?per_page=100`);
     const inlineDiscussion = pages(`repos/${repo}/pulls/${pr.number}/comments?per_page=100`);
     task.files = files.map(f => ({ filename: f.filename, patch: bounded(f.patch, 12000) }));
     task.previous_findings = reviews.map(recordFrom).filter(Boolean).flatMap(r => r.finding_keys || []);
+    task.previous_structured_findings = previousFindings(reviews);
     const commits = pages(`repos/${repo}/pulls/${pr.number}/commits?per_page=100`);
     const linked = [...new Set((pr.body || '').match(/(?<![\w/])#\d+/g) || [])].slice(0, 4);
     const linkedIssues = linked.flatMap(ref => {
@@ -138,7 +157,8 @@ async function prepare() {
       base_sha: pr.base.sha, linked_issues: linkedIssues, diff_is_partial: files.length > 40 || files.some(f => !f.patch),
       files: files.slice(0, 40).map(f => { const patch = bounded(f.patch, Math.max(0, Math.min(3000, remaining))); remaining -= patch.length; return { filename: f.filename, status: f.status, patch }; }),
       commits: commits.slice(-8).map(c => ({ sha: c.sha, message: bounded(c.commit.message, 400) })),
-      previous_reviews: reviews.slice(-4).map(r => ({ author: r.user?.login, body: bounded(r.body, 1200) })),
+      previous_structured_findings: task.previous_structured_findings,
+      previous_reviews: reviews.slice(-4).map(r => ({ author: r.user?.login, body: bounded(publicText(r.body), 1200) })),
       previous_inline_comments: inlineDiscussion.slice(-6).map(c => ({ author: c.user?.login, path: c.path, line: c.line, commit_id: c.commit_id, body: bounded(c.body, 800) })) };
     if (remaining <= 0 || files.some(f => (f.patch || '').length > 3000)) task.context.pr.diff_is_partial = true;
     if (task.mode === 'repair') {
@@ -156,19 +176,46 @@ async function prepare() {
       const headCommit = gh(`repos/${repo}/commits/${task.head_sha}`);
       const revisionAuthor = humanRevisionAuthor(headCommit);
       const humanRevision = revisionAuthor ? canWrite(repo, revisionAuthor.login) : false;
-      task.budget = repairBudget(history, task.head_sha, humanRevision, resetId);
-      const jobs = pages(`repos/${repo}/actions/runs/${ci.id}/attempts/${ci.run_attempt}/jobs?per_page=100`).flatMap(p => p.jobs || []);
-      const failed = jobs.filter(j => j.conclusion === 'failure');
-      if (!task.budget.allowed) { notice(task, `${task.budget.reason}\n\nRemaining failures: ${failed.map(j => j.name).join(', ') || 'see CI run'}. ${ci.html_url}`, 'repair-limit'); return; }
-      if (history.some(r => r.kind === 'repair' && r.cycle === task.budget.cycle && r.ci_run_id === ci.id && r.ci_run_attempt === ci.run_attempt)) return;
-      let excerpt = 'Failure logs unavailable; inspect the failed steps and run URL.';
-      try { excerpt = command('gh', ['run', 'view', String(ci.id), '--attempt', String(ci.run_attempt), '--repo', repo, '--log-failed'], { maxBuffer: 4 * 1024 * 1024 }).slice(-14000); } catch { /* step metadata still available */ }
-      excerpt = redactor()(excerpt).replace(/\x1b\[[0-9;]*m/g, '');
-      task.ci_run_id = ci.id; task.ci_run_attempt = ci.run_attempt;
-      task.failure_signature = failureSignature(failed);
-      task.context.ci = { id: ci.id, attempt: ci.run_attempt, head_sha: ci.head_sha, url: ci.html_url,
-        failed_jobs: failed.map(j => ({ name: j.name, steps: j.steps?.filter(s => s.conclusion === 'failure').map(s => s.name) })), log_excerpt: excerpt };
-      save(path.join(ARTIFACTS, 'ci-failures.json'), task.context.ci);
+      const currentReview = latestReview(reviews, task.head_sha);
+      if (sourceReview && currentReview && currentReview.id !== sourceReview.id) return;
+      if (!ci && sourceReview) {
+        const candidates = gh(`repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${task.head_sha}&status=failure&per_page=10`).workflow_runs || [];
+        ci = candidates.find(run => run.head_sha === task.head_sha && run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === `.github/workflows/${CI_WORKFLOW}` && run.name === 'CI' && run.status === 'completed' && run.conclusion === 'failure');
+      }
+      let failed = [];
+      if (ci) {
+        const jobs = pages(`repos/${repo}/actions/runs/${ci.id}/attempts/${ci.run_attempt}/jobs?per_page=100`).flatMap(p => p.jobs || []);
+        failed = jobs.filter(j => j.conclusion === 'failure');
+        task.ci_run_id = ci.id; task.ci_run_attempt = ci.run_attempt;
+        task.failure_signature = failureSignature(failed);
+      }
+      task.budget = repairBudget(history, task.head_sha, humanRevision, resetId,
+        { source: task.repair_source, failure_signature: task.failure_signature });
+      if (!task.budget.allowed) {
+        notice(task, task.budget.reason, task.budget.reason_code === 'exhausted' ? 'repair-limit' : 'repair-policy',
+          'Remaining failures: ' + (failed.map(j => j.name).join(', ') || 'See current review findings.') + (ci ? '\n' + ci.html_url : ''));
+        return;
+      }
+      const currentRecord = currentReview && publishedReview(currentReview, task.head_sha);
+      const candidates = sourceReview ? task.requested_findings : actionableFindings(currentRecord?.findings || []);
+      task.review_findings = remainingFindings(history, task.budget.cycle, candidates);
+      if (sourceReview && !task.review_findings.length) return;
+      task.review_ids = [...new Set([task.review_id, ...(currentRecord && task.review_findings.length ? [currentReview.id] : [])].filter(Boolean))];
+      task.request_keys = [...task.review_ids.map(id => 'review:' + id), ...(ci ? ['ci:' + ci.id + ':' + ci.run_attempt] : [])];
+      if (repairRequestSeen(history, task.budget.cycle, task.request_keys)) return;
+      // A CI and review request for the same head share one verified context.
+      // Following a fix, queued requests for the old head fail the SHA check.
+      task.context.repair_source = task.repair_source;
+      task.context.review_findings = task.review_findings;
+      task.context.source_review_ids = task.review_ids;
+      if (ci) {
+        let excerpt = 'Failure logs unavailable; inspect the failed steps and run URL.';
+        try { excerpt = command('gh', ['run', 'view', String(ci.id), '--attempt', String(ci.run_attempt), '--repo', repo, '--log-failed'], { maxBuffer: 4 * 1024 * 1024 }).slice(-14000); } catch { /* metadata is still useful */ }
+        excerpt = redactor()(excerpt).replace(/\x1b\[[0-9;]*m/g, '');
+        task.context.ci = { id: ci.id, attempt: ci.run_attempt, head_sha: ci.head_sha, url: ci.html_url,
+          failed_jobs: failed.map(j => ({ name: j.name, steps: j.steps?.filter(s => s.conclusion === 'failure').map(s => s.name) })), log_excerpt: excerpt };
+        save(path.join(ARTIFACTS, 'ci-failures.json'), task.context.ci);
+      }
     }
   }
   // Fetch only through the trusted checkout with a step-scoped job token.
@@ -179,17 +226,30 @@ async function prepare() {
   save(path.join(ARTIFACTS, 'task.json'), { mode: task.mode, number: task.number, head_sha: task.head_sha, run_id: task.run_id, ci_run_id: task.ci_run_id });
   output('proceed', 'true');
 }
+function recheck() {
+  const task = json(taskFile);
+  const current = task.mode === 'issue' ? gh(`repos/${task.repo}/issues/${task.number}`) : prFor(task.repo, task.number);
+  const valid = current.state === 'open' && (task.mode === 'issue' || current.head.sha === task.head_sha);
+  output('current', String(valid));
+  if (!valid && task.record) comment(task.repo, task.number, { ...task.record, status: 'superseded' },
+    message(task, task.mode === 'repair' ? 'repair_human' : 'issue_findings', 'The revision changed or the item was closed before execution.', { next: 'Use the latest revision; this attempt will not publish changes.' }), task.comment_id);
+}
 function reserve() {
   const task = json(taskFile);
   if (task.mode === 'review') return;
   const record = task.mode === 'repair' ? {
-    kind: 'repair', status: 'reserved', cycle: task.budget.cycle, attempt: task.budget.attempt,
+    kind: 'repair', source: task.repair_source, status: 'reserved', cycle: task.budget.cycle, attempt: task.budget.attempt,
     input_sha: task.head_sha, output_sha: null, ci_run_id: task.ci_run_id, ci_run_attempt: task.ci_run_attempt,
+    review_ids: task.review_ids, finding_keys: (task.review_findings || []).map(f => f.key), request_keys: task.request_keys,
     failure_signature: task.failure_signature, run_id: task.run_id,
   } : { kind: 'issue', status: 'started', input_sha: task.head_sha, run_id: task.run_id };
-  const created = comment(task.repo, task.number, record,
-    `Codex is investigating ${task.mode === 'repair' ? `CI failure (attempt ${record.attempt}/3)` : 'this issue'}. [Workflow run](${runUrl(task)}).`);
-  task.record = record; task.comment_id = created.id; save(taskFile, task);
+  const previous = task.mode === 'issue' ? task.history?.filter(r => r.kind === 'issue').at(-1)?.comment_id : undefined;
+  task.record = record;
+  const created = comment(task.repo, task.number, record, message(task,
+    task.mode === 'issue' ? 'issue_investigating' : task.repair_source === 'review' ? 'repair_review' : 'repair_ci',
+    task.mode === 'issue' ? 'Investigating the issue and implementing an appropriate focused solution.' : 'Verifying the reported defect and checking the relevant code and tests.',
+    { pending: true, next: 'Investigate, verify and run focused checks.' }), previous);
+  task.comment_id = created.id; save(taskFile, task);
 }
 function gitContext(task, root = ROOT, work = WORK) {
   // A separate index and trusted Git dir keep model-created .git/config, hooks,
@@ -212,6 +272,7 @@ export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   for (let i = 0; i + 1 < raw.length && raw[i]; i += 2) entries.push({ mode: raw[i].split(' ')[1], file: raw[i + 1] });
   validateChanges(entries);
   if (!entries.length) return null;
+  if (task.review_findings?.length && !entries.some(e => /(?:\.(?:spec|test)\.|(?:^|\/)(?:tests?|__tests__)\/)/.test(e.file))) throw new Error('Review repairs must add or update regression coverage');
   if (entries.some(e => e.file === 'package.json')) {
     const before = JSON.parse(git(['show', `${task.head_sha}:package.json`]));
     const after = JSON.parse(git(['show', ':package.json']));
@@ -249,42 +310,81 @@ export function pushArguments(task, commit, remote = `https://github.com/${task.
     'push', '--porcelain', `--force-with-lease=refs/heads/${task.branch}:${task.mode === 'repair' ? task.head_sha : ''}`,
     remote, `${sha(commit)}:refs/heads/${branch(task.branch)}`];
 }
+async function publishReview(task, result) {
+  const pr = prFor(task.repo, task.number);
+  if (pr.head.sha !== task.head_sha || pr.state !== 'open') return;
+  const prior = pages(`repos/${task.repo}/pulls/${task.number}/reviews?per_page=100`);
+  const existing = prior.filter(r => recordFrom(r)?.kind === 'review' && recordFrom(r)?.head_sha === task.head_sha).at(-1);
+  if (existing) {
+    const record = publishedReview(existing, task.head_sha);
+    if (record) requestReviewRepair(task, existing, record, dispatch, gh);
+    return;
+  }
+  if (task.context.pr.diff_is_partial) {
+    result.review_status = 'incomplete';
+    result.unresolved.push('The supplied diff was partial; complete PR coverage could not be established.');
+    save(path.join(ARTIFACTS, 'result.json'), result);
+  }
+  const findings = canonicalFindings(result.findings, task.previous_structured_findings || []);
+  const significant = findings.filter(f => f.priority !== 'P3');
+  const known = new Set(task.previous_findings || []), fresh = findings.filter(f => !known.has(f.key));
+  const lines = changedLines(task.files), fileNames = new Set(task.files.map(f => f.filename));
+  const inline = fresh.filter(f => fileNames.has(f.path) && lines.has(`${f.path}:${f.line}`));
+  const record = { kind: 'review', head_sha: task.head_sha, run_id: task.run_id, review_status: result.review_status,
+    finding_keys: findings.map(f => f.key), findings, repair_requested: false };
+  const linkedCycle = (task.history || []).filter(r => r.kind === 'repair' && (r.input_sha === task.head_sha || r.output_sha === task.head_sha)).at(-1)?.cycle || 'head-' + task.head_sha;
+  const needsRepair = remainingFindings(task.history || [], linkedCycle, actionableFindings(findings)).length > 0;
+  if (!needsRepair) record.repair_requested = true;
+  const summary = result.review_status === 'incomplete' ? 'Review incomplete. ' + (result.unresolved[0] || 'Some relevant evidence was unavailable.') :
+    significant.length ? (fresh.some(f => f.priority !== 'P3') ? significant.slice(0, 2).map(f => f.title).join('; ') : significant.length + ' previously reported significant finding(s) remain unresolved.') :
+      'No significant defects were found in the reviewed changes.';
+  const next = needsRepair ? 'Repair Agent will independently verify the actionable findings.' : result.review_status === 'incomplete' ?
+    'Resolve the review limits and request another review.' : significant.length ? 'Review the feedback and prior repair explanations before merging.' : 'Human review and merge when ready.';
+  const details = 'Current findings:\n' + findings.map(f => '[' + f.priority + '] ' + f.key + ' ' + f.path + ':' + f.line + ' ' + f.title + '\n' + f.body + '\nActionable: ' + f.actionable).join('\n\n');
+  const body = marker(record) + '\n' + message(task, reviewStage(result, significant), summary, { result, next, extra: details });
+  if (Buffer.byteLength(body) > 63000) throw new Error('Published review exceeds the safe comment limit');
+  const created = gh(`repos/${task.repo}/pulls/${task.number}/reviews`, { method: 'POST', body: {
+    commit_id: task.head_sha, event: 'COMMENT', body,
+    comments: inline.map(f => ({ path: f.path, line: f.line, side: 'RIGHT', body: renderFinding(f) })),
+  } });
+  requestReviewRepair(task, { ...created, body }, record, dispatch, gh);
+}
 async function publish() {
   const task = json(taskFile); process.env.CODEX_DEFAULT_BRANCH = task.default_branch;
   const resultFile = path.join(ARTIFACTS, 'result.json');
   if (!existsSync(resultFile)) {
-    const message = 'Codex execution failed or timed out. No changes were published. Check subscription authentication, usage limits and the workflow artifacts.';
-    if (task.record) comment(task.repo, task.number, { ...task.record, status: 'failed' }, `${message}\n\n[Workflow run](${runUrl(task)}).`, task.comment_id);
-    else notice(task, message, 'execution-error');
+    const reason = existsSync(path.join(ARTIFACTS, 'error.json')) ? json(path.join(ARTIFACTS, 'error.json')).message : 'Execution failed or timed out.';
+    const stage = task.mode === 'review' ? 'review_incomplete' : task.mode === 'repair' ? 'repair_human' : 'issue_findings';
+    const body = message(task, stage, 'Execution could not finish. ' + reason,
+      { next: 'Resolve the reported execution problem before retrying.', extra: reason });
+    if (task.record) comment(task.repo, task.number, { ...task.record, status: 'failed' }, body, task.comment_id);
+    else comment(task.repo, task.number, { kind: 'execution-error', head_sha: task.head_sha, run_id: task.run_id }, body);
     return;
   }
   const result = validateResult(json(resultFile), task.mode);
-  const summary = publicText(infoSummary(result)) + `\n\n[Workflow run](${runUrl(task)}).`;
-  if (task.mode === 'review') {
+  if (task.mode === 'review') return publishReview(task, result);
+  if (task.mode === 'repair') validateRepairVerification(result, task.review_findings || []);
+  if (task.mode === 'repair') {
+    task.record.finding_verifications = result.finding_verifications;
+    // Recheck again before publishing even a no-change explanation.
     const pr = prFor(task.repo, task.number);
-    if (pr.head.sha !== task.head_sha || pr.state !== 'open') return;
-    const prior = pages(`repos/${task.repo}/pulls/${task.number}/reviews?per_page=100`);
-    if (prior.some(r => recordFrom(r)?.kind === 'review' && recordFrom(r)?.head_sha === task.head_sha)) return;
-    const known = new Set(task.previous_findings), findings = result.findings.filter(f => !known.has(findingKey(f)));
-    const lines = changedLines(task.files), fileNames = new Set(task.files.map(f => f.filename));
-    const inline = findings.filter(f => fileNames.has(f.path) && lines.has(`${f.path}:${f.line}`));
-    const rest = findings.filter(f => !inline.includes(f));
-    const scope = task.context.pr.diff_is_partial ? '\n\nScope limitation: the supplied diff was partial; this review cannot establish full PR coverage.' : '';
-    const body = `${marker({ kind: 'review', head_sha: task.head_sha, run_id: task.run_id, finding_keys: findings.map(findingKey) })}\n${summary}${scope}\n\n` +
-      (findings.length ? rest.map(f => `[${f.priority}] ${publicText(f.title)} — ${publicText(f.path)}:${f.line}\n${publicText(f.body)}`).join('\n\n') : 'No new significant issues were found within the reviewed scope. Previously reported findings may still require attention.');
-    gh(`repos/${task.repo}/pulls/${task.number}/reviews`, { method: 'POST', body: {
-      commit_id: task.head_sha, event: 'COMMENT', body,
-      comments: inline.map(f => ({ path: f.path, line: f.line, side: 'RIGHT', body: `[${f.priority}] ${publicText(f.title)}\n\n${publicText(f.body)}` })),
-    } });
-    return;
+    if (pr.state !== 'open' || pr.head.sha !== task.head_sha) {
+      comment(task.repo, task.number, { ...task.record, status: 'superseded' }, message(task, 'repair_human',
+        'The PR changed during this attempt. The older revision will not be updated.', { next: 'Review the latest revision.', result }), task.comment_id);
+      return;
+    }
   }
   if (result.outcome !== 'changes') {
-    const status = task.mode === 'repair' ? 'halted' : result.outcome === 'external_failure' ? 'failed' : 'complete';
-    comment(task.repo, task.number, { ...task.record, status, outcome: result.outcome, summary: bounded(result.summary, 1500) }, summary, task.comment_id);
+    const disputed = result.finding_verifications.length && result.finding_verifications.every(v => ['incorrect', 'not_reproduced', 'already_resolved'].includes(v.status));
+    const status = task.mode === 'repair' ? result.finding_verifications.length ? 'complete' : 'halted' : result.outcome === 'external_failure' ? 'failed' : 'complete';
+    comment(task.repo, task.number, { ...task.record, status, outcome: result.outcome, summary: bounded(result.summary, 1500) },
+      message(task, task.mode === 'repair' ? 'repair_human' : 'issue_findings', result.summary, { result,
+        next: disputed ? 'Review the explanation. This finding will not be retried in this cycle.' : task.mode === 'repair' ? 'Resolve the reported blocker before retrying.' : 'Follow the findings or provide the requested information.' }), task.comment_id);
     return;
   }
   if (task.mode === 'issue' && gh(`repos/${task.repo}/issues/${task.number}`).state !== 'open') {
-    comment(task.repo, task.number, { ...task.record, status: 'complete', outcome: 'no_change' }, 'The issue was closed during investigation. No changes were published.', task.comment_id);
+    comment(task.repo, task.number, { ...task.record, status: 'complete', outcome: 'no_change' },
+      message(task, 'issue_findings', 'The issue was closed during investigation.', { result, next: 'No further action.' }), task.comment_id);
     return;
   }
   const commit = buildCommit(task, result);
@@ -299,36 +399,39 @@ async function publish() {
     });
     if (remote.trim()) throw new Error('Issue branch already exists; human inspection is required before resuming');
   }
-  // Save the output SHA before pushing. A crash after push still cannot reset a
-  // repair cycle, and a human update wins because this is a normal fast-forward.
   task.record.output_sha = commit; task.record.status = 'publishing';
-  comment(task.repo, task.number, task.record, summary, task.comment_id); save(taskFile, task);
+  comment(task.repo, task.number, task.record, message(task, task.mode === 'repair' ? task.repair_source === 'review' ? 'repair_review' : 'repair_ci' : 'issue_investigating',
+    'The focused change is ready for safe publication.', { result, next: 'Publish the verified change.' }), task.comment_id);
+  save(taskFile, task);
   command('git', pushArguments(task, commit), { cwd: ROOT });
   let prNumber = task.number;
   if (task.mode === 'issue') {
     const issue = gh(`repos/${task.repo}/issues/${task.number}`);
+    const description = message(task, 'issue_pr', result.summary, { result, commit, next: 'CI and independent review.', extra: 'Refs #' + task.number });
     const pr = gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
       head: task.branch, base: task.default_branch, title: bounded(result.title || issue.title, 200),
-      body: `Refs #${task.number}\n\n${summary}`, draft: result.tests.some(t => t.status === 'failed') || !result.tests.some(t => t.status === 'passed'),
+      body: marker({ kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id }) + '\n' + description,
+      draft: result.tests.some(t => t.status === 'failed') || !result.tests.some(t => t.status === 'passed'),
     } });
     prNumber = pr.number;
-    comment(task.repo, prNumber, { kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id },
-      'Created by Codex automation. Failed CI automatically starts bounded repair on this repository-owned branch. A maintainer reviews and merges this PR.');
-    comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) }, `Prepared ${pr.html_url}\n\n${summary}`, task.comment_id);
+    comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) },
+      message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next: 'CI and independent review.' }), task.comment_id);
   } else {
-    comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) }, `Pushed repair commit ${commit} (attempt ${task.record.attempt}/3).\n\n${summary}`, task.comment_id);
+    comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) },
+      message(task, 'repair_pushed', result.summary, { result, commit, next: 'CI and independent review.' }), task.comment_id);
   }
-  // A dispatch failure fails visibly; the reserved attempt and output SHA remain
-  // durable. It never triggers another implementation merely to retry dispatch.
   nextRuns(task, prNumber, commit, gh, dispatch, trustedWorkflowTree(commit));
 }
 async function reportFailure() {
   if (!existsSync(taskFile)) return;
   const task = json(taskFile);
-  const text = 'Automation could not complete. Check the workflow for authentication, credential persistence, stale-head, permission or publishing errors. Human intervention may be required.';
-  // Preserve output SHA/cycle when a commit was already published.
-  if (task.record) comment(task.repo, task.number, { ...task.record, status: 'failed' }, `${text}\n\n[Workflow run](${runUrl(task)}).`, task.comment_id);
-  else notice(task, text, 'automation-error');
+  const errorFile = path.join(ARTIFACTS, 'error.json');
+  const reason = existsSync(errorFile) ? json(errorFile).message : 'Execution or publication could not finish. Human input is required.';
+  const stage = task.mode === 'review' ? 'review_incomplete' : task.mode === 'repair' ? 'repair_human' : 'issue_findings';
+  const body = message(task, stage, reason, { next: 'Inspect the technical details and resolve the blocker.',
+    extra: 'Check authentication, credential persistence, exact head SHA, repository permissions and publication steps.' });
+  if (task.record) comment(task.repo, task.number, { ...task.record, status: 'failed' }, body, task.comment_id);
+  else notice(task, reason, 'automation-error');
 }
 async function main() {
   if (process.env.GITHUB_SERVER_URL && process.env.GITHUB_SERVER_URL !== 'https://github.com') throw new Error('Only github.com is configured');
@@ -336,8 +439,13 @@ async function main() {
   if (action === 'request') return request(process.argv[3]);
   if (action === 'prepare') return prepare();
   if (action === 'reserve') return reserve();
+  if (action === 'recheck') return recheck();
   if (action === 'publish') return publish();
   if (action === 'report-failure') return reportFailure();
   throw new Error('Unknown coordinator action');
 }
-if (process.argv[1] === import.meta.filename) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] === import.meta.filename) main().catch(error => {
+  const reason = redactor()(error.message);
+  save(path.join(ARTIFACTS, 'error.json'), { message: reason });
+  console.error(reason); process.exitCode = 1;
+});

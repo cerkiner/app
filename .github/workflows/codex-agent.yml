@@ -12,11 +12,24 @@ on:
         type: choice
         options: [issue, review, repair]
       target:
-        description: Issue/PR number, or failing CI run ID for repair
+        description: Issue/PR number; CI run ID for CI repair; PR number for review repair
         required: true
         type: string
       expected_sha:
         description: Optional exact PR head SHA (stale requests are skipped)
+        type: string
+        default: ''
+      repair_source:
+        description: Repair trigger
+        type: choice
+        options: [ci, review]
+        default: ci
+      review_id:
+        description: Published Codex review identifier for review repair
+        type: string
+        default: ''
+      review_findings:
+        description: Structured actionable findings, validated against the published review
         type: string
         default: ''
       refresh_hops:
@@ -61,6 +74,9 @@ jobs:
       CODEX_MODE: ${{ inputs.mode || 'review' }}
       CODEX_TARGET: ${{ inputs.target || github.event.workflow_run.id }}
       CODEX_EXPECTED_SHA: ${{ inputs.expected_sha || '' }}
+      CODEX_REPAIR_SOURCE: ${{ inputs.repair_source || 'ci' }}
+      CODEX_REVIEW_ID: ${{ inputs.review_id || '' }}
+      CODEX_REVIEW_FINDINGS: ${{ inputs.review_findings || '' }}
       CODEX_NEW_CYCLE: ${{ inputs.new_cycle || false }}
       CODEX_CYCLE_REQUEST: ${{ inputs.cycle_request || '' }}
       CODEX_REFRESH_HOPS: ${{ inputs.refresh_hops || '0' }}
@@ -91,12 +107,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/codex/agent.mjs reserve
-      - name: Install the verified Codex CLI
+      - name: Recheck the exact revision before execution
+        id: current
         if: steps.auth.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/codex/agent.mjs recheck
+      - name: Install the verified Codex CLI
+        if: steps.current.outputs.current == 'true'
         run: npm install --global --ignore-scripts @openai/codex@0.169.0
       - name: Execute Codex with isolated repository tools
         id: execute
-        if: steps.auth.outputs.ready == 'true'
+        if: steps.current.outputs.current == 'true'
         env:
           CODEX_MODEL: ${{ vars.CODEX_MODEL }}
         run: node .github/scripts/codex/run-codex.mjs

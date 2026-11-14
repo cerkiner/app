@@ -33,7 +33,7 @@ async function main() {
       // Use the separate job token for workflow dispatch; GH_PAT needs Secrets only.
       const previous = process.env.GH_TOKEN;
       process.env.GH_TOKEN = process.env.CODEX_DISPATCH_TOKEN;
-      try { dispatch(repo, task.mode, task.target, task.mode === 'issue' ? '' : task.head_sha, hops + 1, task.new_cycle, task.cycle_request); }
+      try { dispatch(repo, task.mode, task.target, task.mode === 'issue' ? '' : task.head_sha, hops + 1, task.new_cycle, task.cycle_request, { source: task.repair_source, review_id: task.review_id, findings: task.requested_findings }); }
       finally { process.env.GH_TOKEN = previous; }
       output('ready', 'false');
       console.log('Auth changed after this run was queued; dispatched a fresh worker without using stale credentials.');
