@@ -48,7 +48,7 @@ jobs:
           HOSTINGER_FTP_PORT: ${{ secrets.HOSTINGER_FTP_PORT || '21' }}
           RELEASE_CHECK_ONLY: ${{ inputs.check_only }}
           RELEASE_SHA: ${{ steps.release.outputs.sha }}
-        run: python3 .github/scripts/deploy/ftps.py
+        run: python3 .github/scripts/deploy/ftp.py
       - name: Record result
         if: always()
         env:
