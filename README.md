@@ -4,25 +4,36 @@ This progressive web application is a personal page demo built with the Ionic Fr
 
 ## Table of Contents
 - [Getting Started](#getting-started)
-- [Checking Changes](#checking-changes)
 - [Deploying as Progressive Web App](#deploying-as-progressive-web-app)
+- [Checking Changes](#checking-changes)
 
 
 ## Getting Started
 
-* [Download the installer](https://nodejs.org/) for Node LTS.
-* Install the ionic CLI globally: `npm install -g ionic`
-* Clone this repository: `git clone https://github.com/cerkiner/app.git`.
-* Run `npm install` from the project root.
-* Run `ionic serve` in a terminal from the project root.
-* Profit. :tada:
+Use Node 24 (managed by nvm):
 
-_Note: See [How to Prevent Permissions Errors](https://docs.npmjs.com/getting-started/fixing-npm-permissions) if you are running into issues when trying to install packages globally._
+```sh
+nvm install
+nvm use
+npm ci
+npm start
+```
+
+Open http://localhost:4200. The local server reloads when source files change.
 
 ## Deploying as Progressive Web App
 
-1. Run `npm run ionic:build --prod`
-2. Push the `app` folder to your hosting service
+1. Run `npm run build -- --configuration production`
+2. Upload the generated `app/` files to `public_html/app/` on the Hostinger website `erkiner.com`. The public address is https://sam.erkiner.com/app/.
+3. Upload supporting assets first, then `index.html` and finally `ngsw.json`. Retain previous hashed assets so existing visitors can finish using their cached version.
+4. Verify the live page and service-worker resources after uploading. The deployment target is recorded in `.hostinger/site.json`.
+
+GitHub Actions deploys validated builds after successful `master` push validation.
+Set the four repository FTP secrets described in
+[the deployment guide](.github/HOSTINGER_DEPLOYMENT.md). No variables are needed.
+The guide also covers the optional connection check, retries and rollback.
+
+The hosting document root is shared with WordPress, the blog and the API. Use targeted file uploads into `app/`; do not use a whole-site archive deployment or replace the document root. Preserve the existing server redirects and the canonical URL and migration cleanup in `src/index.html`.
 
 ## Checking Changes
 
