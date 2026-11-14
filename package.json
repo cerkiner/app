@@ -33,7 +33,7 @@
     "@ionic/angular": "^9.0.10",
     "@ionic/storage-angular": "^4.0.0",
     "cordova-android": "^15.1.0",
-    "cordova-ios": "^8.1.1",
+    "cordova-ios": "^8.2.0",
     "cordova-plugin-device": "^3.0.0",
     "cordova-plugin-inappbrowser": "^7.0.0",
     "cordova-plugin-ionic-keyboard": "^2.2.0",
