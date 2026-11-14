@@ -11,14 +11,22 @@ export function parseResult(text, mode, redact = redactor()) {
   catch { throw new Error('Codex returned invalid JSON; result contents were withheld from logs.'); }
   return validateResult(redactValue(result, redact), mode);
 }
+export function reviewCoverage(audit, files = []) {
+  const normalized = value => (value || '').replace(/^\/workspace\//, '').replace(/^\.\//, '');
+  const sameOperation = (a, b) => a.tool === b.tool && (a.tool === 'read_file' ? normalized(a.path) === normalized(b.path) :
+    a.tool === 'search' ? a.pattern === b.pattern : a.tool === 'list_files');
+  const failures = audit.filter((item, index) => !item.success && !item.optional_instruction &&
+    !audit.slice(index + 1).some(later => later.success && sameOperation(item, later)));
+  return { reads: audit.filter(item => item.tool === 'read_file' && item.success).length,
+    source_read: audit.some(item => item.tool === 'read_file' && item.success && !item.optional_instruction &&
+      (!files.length || files.includes(normalized(item.path)))), failed_operations: failures.length };
+}
 export function enforceReviewCompletion(result, mode, audit, files = []) {
   if (mode !== 'review') return result;
-  const readSource = audit.some(item => item.tool === 'read_file' && item.success && !item.optional_instruction &&
-    (!files.length || files.includes((item.path || '').replace(/^\.\//, ''))));
-  const failed = audit.some(item => !item.success && !item.optional_instruction);
-  if (!readSource || failed) {
+  const coverage = reviewCoverage(audit, files);
+  if (!coverage.source_read || coverage.failed_operations) {
     result.review_status = 'incomplete';
-    result.unresolved.push(!readSource ? 'Relevant repository source could not be read through the isolated tools.' : 'A repository tool operation failed; complete review coverage was not established.');
+    result.unresolved.push(!coverage.source_read ? 'Relevant repository source could not be read through the isolated tools.' : 'A repository tool operation could not be recovered; complete review coverage was not established.');
   }
   return validateResult(result, mode);
 }
@@ -137,7 +145,7 @@ async function main() {
     if (execution.code !== 0 || execution.timedOut) throw new Error('Codex failed or timed out. Check subscription login, usage limits and CLI compatibility; no API billing fallback was attempted.');
     const audit = existsSync(path.join(controller, 'tool-audit.jsonl')) ? readFileSync(path.join(controller, 'tool-audit.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
     const result = enforceReviewCompletion(parseResult(readFileSync(path.join(controller, 'result.json'), 'utf8'), task.mode, redact), task.mode, audit, (task.files || []).map(f => f.filename));
-    save(path.join(ARTIFACTS, 'tool-coverage.json'), { reads: audit.filter(item => item.tool === 'read_file' && item.success).length, failed_operations: audit.filter(item => !item.success && !item.optional_instruction).length });
+    save(path.join(ARTIFACTS, 'tool-coverage.json'), reviewCoverage(audit, (task.files || []).map(f => f.filename)));
     save(path.join(ARTIFACTS, 'result.json'), result);
     console.log('Codex execution completed; sanitized results are ready for validation.');
   } catch (error) {
