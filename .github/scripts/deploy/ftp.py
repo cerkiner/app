@@ -1,4 +1,4 @@
-"""Folder-restricted explicit FTPS publishing; no plaintext fallback or deletes."""
+"""Folder-restricted FTP publishing; preserve remote assets and configuration."""
 import ftplib
 import hashlib
 import io
@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import ssl
 import sys
 import time
 import urllib.request
@@ -26,7 +25,7 @@ def config(env):
     if not all(values) or any('\n' in x or '\r' in x for x in values):
         raise DeploymentError('Missing or invalid FTP credentials')
     host = urlsplit(values[0].strip() if '://' in values[0] else '//' + values[0].strip())
-    if (host.scheme not in ('', 'ftp', 'ftps') or not host.hostname
+    if (host.scheme not in ('', 'ftp') or not host.hostname
             or host.username is not None or host.password is not None
             or host.path not in ('', '/') or host.query or host.fragment):
         raise DeploymentError('FTP host must be a hostname or FTP URL without credentials or a folder path')
@@ -42,12 +41,10 @@ def config(env):
 
 def connect(settings):
     host, username, password, port = settings
-    ftp = ftplib.FTP_TLS(context=ssl.create_default_context(), timeout=30)
+    ftp = ftplib.FTP(timeout=30)
     try:
         ftp.connect(host, port)
-        ftp.auth()  # TLS must succeed before credentials are sent.
         ftp.login(username, password)
-        ftp.prot_p()  # Encrypt data connections as well as authentication.
         ftp.cwd('/')
         return ftp
     except Exception:
@@ -181,14 +178,14 @@ def main():
     root = Path('release-app')
     paths = files(root)
     check_only = os.environ.get('RELEASE_CHECK_ONLY') == 'true'
-    print('Checking encrypted connection and isolated app folder', flush=True)
+    print('Checking FTP connection and isolated app folder', flush=True)
     ftp = connect(settings)
     try:
         preflight(ftp)
     finally:
         ftp.close()
     if check_only:
-        print('Encrypted connection and app folder checks passed; no files uploaded. Confirm folder restriction in hPanel.')
+        print('FTP connection and app folder checks passed; no files uploaded. Confirm folder restriction in hPanel.')
         return
     print('Uploading validated build', flush=True)
     publish(settings, root, paths)
