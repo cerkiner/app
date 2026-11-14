@@ -13,18 +13,22 @@ import urllib.request
 import uuid
 
 PUBLIC_URL = 'https://sam.erkiner.com/app/'
+class DeploymentError(ValueError):
+    """A fixed, credential-free diagnostic safe to show in workflow logs."""
+
+
 MARKERS = {'wp-admin', 'wp-content', 'wp-includes', 'wp-config.php'}
 
 
 def config(env):
     values = [env.get('HOSTINGER_FTP_' + key, '') for key in ('HOST', 'USERNAME', 'PASSWORD')]
     if not all(values) or any('\n' in x or '\r' in x for x in values):
-        raise ValueError('Missing or invalid FTP credentials')
+        raise DeploymentError('Missing or invalid FTP credentials')
     if not re.fullmatch(r'[A-Za-z0-9.-]+', values[0]):
-        raise ValueError('FTP host must be a hostname, without a URL or path')
+        raise DeploymentError('FTP host must be a hostname, without a URL or path')
     port = int(env.get('HOSTINGER_FTP_PORT', '21'))
     if not 1 <= port <= 65535:
-        raise ValueError('Invalid FTP port')
+        raise DeploymentError('Invalid FTP port')
     return (*values, port)
 
 
@@ -45,24 +49,24 @@ def connect(settings):
 
 def preflight(ftp):
     if ftp.pwd() != '/':
-        raise ValueError('Account must be rooted at the app directory')
+        raise DeploymentError('Account must be rooted at the app directory')
     names = {PurePosixPath(x.rstrip('/')).name for x in ftp.nlst()}
     if names & MARKERS or 'index.html' not in names:
-        raise ValueError('Root does not look like the existing isolated app folder')
+        raise DeploymentError('Root does not look like the existing isolated app folder')
     content = io.BytesIO()
     ftp.retrbinary('RETR index.html', content.write)
     html = content.getvalue()
     if b'https://sam.erkiner.com/app/' not in html or b'<app-root' not in html:
-        raise ValueError('Existing app identity does not match deployment target')
+        raise DeploymentError('Existing app identity does not match deployment target')
     ftp.cwd('..')
     if ftp.pwd() != '/':
-        raise ValueError('Account can escape the app folder')
+        raise DeploymentError('Account can escape the app folder')
     for directory in ('/wp-admin', '/../wp-admin', '/public_html', '/domains'):
         try:
             ftp.cwd(directory)
         except ftplib.error_perm:
             continue
-        raise ValueError('Account exposes directories outside the app')
+        raise DeploymentError('Account exposes directories outside the app')
     ftp.cwd('/')
 
 
@@ -70,31 +74,31 @@ def files(root):
     result = []
     for path in sorted(root.rglob('*')):
         if path.is_symlink():
-            raise ValueError('Symlinks are not deployable')
+            raise DeploymentError('Symlinks are not deployable')
         if path.is_dir():
             continue
         relative = path.relative_to(root).as_posix()
         if any(part.startswith('.') or part in MARKERS for part in Path(relative).parts):
-            raise ValueError('Server configuration is not deployable')
+            raise DeploymentError('Server configuration is not deployable')
         if not re.fullmatch(r'[A-Za-z0-9_./@+-]+', relative):
-            raise ValueError('Unsafe build filename')
+            raise DeploymentError('Unsafe build filename')
         result.append(relative)
     if not {'index.html', 'ngsw.json'} <= set(result):
-        raise ValueError('Missing production entry files')
+        raise DeploymentError('Missing production entry files')
     html = (root / 'index.html').read_text()
     if '<base href="/app/">' not in html or PUBLIC_URL not in html:
-        raise ValueError('Production base URL or canonical URL is incorrect')
+        raise DeploymentError('Production base URL or canonical URL is incorrect')
     manifest = json.loads((root / 'ngsw.json').read_text())
     for url, digest in manifest['hashTable'].items():
         relative = manifest_path(url)
         if relative not in result or hashlib.sha1((root / relative).read_bytes()).hexdigest() != digest:
-            raise ValueError('Service worker hashes do not match build')
+            raise DeploymentError('Service worker hashes do not match build')
     return [x for x in result if x not in ('index.html', 'ngsw.json')] + ['index.html', 'ngsw.json']
 
 
 def manifest_path(url):
     if not url.startswith('/app/') or '..' in PurePosixPath(url).parts:
-        raise ValueError('Unexpected service-worker resource path')
+        raise DeploymentError('Unexpected service-worker resource path')
     return url[len('/app/'):]
 
 
@@ -143,7 +147,7 @@ def fetch(relative):
                                      headers={'Cache-Control': 'no-cache', 'Accept-Encoding': 'identity'})
     with urllib.request.urlopen(request, timeout=30) as response:
         if response.geturl().split('?')[0] != PUBLIC_URL + relative:
-            raise ValueError('Unexpected public resource redirect')
+            raise DeploymentError('Unexpected public resource redirect')
         return response.read()
 
 
@@ -155,7 +159,7 @@ def verify(root, pause=time.sleep):
         try:
             for relative in sorted(expected):
                 if fetch(relative) != (root / relative).read_bytes():
-                    raise ValueError('Public resource differs from deployed build')
+                    raise DeploymentError('Public resource differs from deployed build')
             return
         except (OSError, ValueError):
             if attempt == 2:
@@ -164,10 +168,12 @@ def verify(root, pause=time.sleep):
 
 
 def main():
+    print('Checking FTP settings and production artifact', flush=True)
     settings = config(os.environ)
     root = Path('release-app')
     paths = files(root)
     check_only = os.environ.get('RELEASE_CHECK_ONLY') == 'true'
+    print('Checking encrypted connection and isolated app folder', flush=True)
     ftp = connect(settings)
     try:
         preflight(ftp)
@@ -176,7 +182,9 @@ def main():
     if check_only:
         print('Encrypted connection and app folder checks passed; no files uploaded. Confirm folder restriction in hPanel.')
         return
+    print('Uploading validated build', flush=True)
     publish(settings, root, paths)
+    print('Verifying public resources', flush=True)
     verify(root)
     print('Production build published and verified')
 
@@ -186,5 +194,6 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         # Server replies and URLs can contain credentials. Never print raw exceptions.
-        print(f'Deployment failed ({type(error).__name__}); check credentials, TLS, folder scope and public resources.', file=sys.stderr)
+        detail = str(error) if isinstance(error, DeploymentError) else type(error).__name__
+        print(f'Deployment failed: {detail}', file=sys.stderr)
         sys.exit(1)
