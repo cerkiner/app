@@ -84,3 +84,19 @@ test('workflow authorization requires the trusted controller workflow tree', t =
   assert.equal(trustedWorkflowTree(first, root), false);
   assert.equal(trustedWorkflowTree(git(['rev-parse', 'HEAD']).trim(), root), true);
 });
+
+test('post-push PR metadata may briefly retain only the exact prior head', () => {
+  const old = 'b'.repeat(40), posts = []; let reads = 0, waits = 0;
+  const api = fake([run(10, 'CI.yml'), run(11, 'codex-review.yml')], posts);
+  assert.equal(startPublishedWorkflows({ ...task, head_sha: old }, 2, revision, (endpoint, request) => {
+    if (endpoint.endsWith('/pulls/2') && ++reads === 1) return { ...pr(), head: { ...pr().head, sha: old } };
+    return api(endpoint, request);
+  }, () => waits++), true);
+  assert.equal(waits, 1); assert.equal(posts.length, 2);
+  posts.length = 0; waits = 0;
+  assert.equal(startPublishedWorkflows({ ...task, head_sha: old }, 2, revision, (endpoint, request) => {
+    if (endpoint.endsWith('/pulls/2')) return { ...pr(), head: { ...pr().head, sha: 'c'.repeat(40) } };
+    return api(endpoint, request);
+  }, () => waits++), false);
+  assert.equal(waits, 0); assert.equal(posts.length, 0);
+});
