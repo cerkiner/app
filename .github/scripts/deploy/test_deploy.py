@@ -15,10 +15,19 @@ import release
 
 class SafetyTests(unittest.TestCase):
     def test_credentials_required_and_host_is_not_url(self):
-        for env in ({}, {'HOSTINGER_FTP_HOST': 'ftp://example.org',
+        for env in ({}, {'HOSTINGER_FTP_HOST': 'https://example.org',
                         'HOSTINGER_FTP_USERNAME': 'user', 'HOSTINGER_FTP_PASSWORD': 'secret'}):
             with self.assertRaises(ValueError):
                 ftps.config(env)
+
+    def test_standard_ftp_urls_are_accepted_without_changing_security(self):
+        env = {'HOSTINGER_FTP_USERNAME': 'user', 'HOSTINGER_FTP_PASSWORD': 'password'}
+        for host in ('example.org', 'ftp://example.org/', 'ftps://example.org', ' example.org '):
+            self.assertEqual(ftps.config(env | {'HOSTINGER_FTP_HOST': host}),
+                             ('example.org', 'user', 'password', 21))
+        for host in ('ftp://example.org/app/', 'ftp://user:password@example.org'):
+            with self.assertRaises(ValueError):
+                ftps.config(env | {'HOSTINGER_FTP_HOST': host})
 
     def test_secret_port_is_used_and_defaults_to_21(self):
         env = {'HOSTINGER_FTP_HOST': 'example.org', 'HOSTINGER_FTP_USERNAME': 'user',
