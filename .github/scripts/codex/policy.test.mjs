@@ -70,6 +70,13 @@ test('review tools cannot execute shell code or read paths outside the repositor
   assert.equal(called, false);
   assert.equal(result.error.code, -32601);
 });
+test('review workspace aliases normalize inside Docker and cannot escape the repository', () => {
+  const relative = toolArgv('read_file', { path: 'src/file.ts' }, true);
+  assert.deepEqual(toolArgv('read_file', { path: '/workspace/src/file.ts' }, true), relative);
+  for (const file of ['/workspace/../auth.json', '/workspace/src/../../auth.json', '/etc/passwd', '/proc/1/environ']) {
+    assert.throws(() => toolArgv('read_file', { path: file }, true));
+  }
+});
 test('implementation commands stay inside Docker argv and credentials are never mounted', () => {
   const argv = toolArgv('workspace', { command: 'echo x; cat /proc/1/environ' }, false);
   assert.equal(argv[0], 'timeout');

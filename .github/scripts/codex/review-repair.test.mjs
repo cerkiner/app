@@ -202,3 +202,17 @@ test('stale-credential redispatch preserves the exact review repair request', t 
   assert.equal(inputs.target, '1'); assert.equal(inputs.repair_source, 'review'); assert.equal(inputs.review_id, '200');
   assert.equal(inputs.expected_sha, a); assert.deepEqual(JSON.parse(inputs.review_findings), [finding()]);
 });
+
+test('successful same-file retries recover lookup errors while unrelated reads do not', () => {
+  const failed = { tool: 'read_file', path: '/workspace/src/a.ts', success: false };
+  const recovered = enforceReviewCompletion(result(), 'review', [failed, { tool: 'read_file', path: 'src/a.ts', success: true }], ['src/a.ts']);
+  assert.equal(recovered.review_status, 'complete');
+  const unrelated = enforceReviewCompletion(result(), 'review', [failed, { tool: 'read_file', path: 'src/b.ts', success: true }], ['src/a.ts', 'src/b.ts']);
+  assert.equal(unrelated.review_status, 'incomplete');
+  assert.equal(enforceReviewCompletion(result(), 'review', [{ tool: 'read_file', path: '/workspace/src/a.ts', success: true }], ['src/a.ts']).review_status, 'complete');
+});
+test('a recovered lookup never upgrades a model-reported incomplete review', () => {
+  const output = enforceReviewCompletion(result({ review_status: 'incomplete', unresolved: ['Required external specification unavailable.'] }), 'review',
+    [{ tool: 'read_file', path: 'src/a.ts', success: true }], ['src/a.ts']);
+  assert.equal(output.review_status, 'incomplete');
+});

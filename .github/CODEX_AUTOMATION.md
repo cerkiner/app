@@ -114,8 +114,11 @@ deduplicates by SHA. Publication always uses `COMMENT`, never `APPROVE` or merge
 Review execution only lists, reads and searches files; it never runs PR code.
 
 Results explicitly state `review_status`: complete, incomplete or not_applicable.
-Missing relevant source access, failed repository tool operations or a partial
-diff force an incomplete review, which cannot use the clean heading. Known
+Missing relevant source access, unrecovered repository tool operations or a
+partial diff force an incomplete review, which cannot use the clean heading. The broker accepts repository-relative paths and safe /workspace/... aliases.
+A successful retry of the same file resolves a lookup failure; a different file
+or an unresolved operation cannot clear that gap. Static review does not require
+executing tests. Known
 findings are still reevaluated on subsequent revisions. Stable keys and explicit
 previous-key references prevent repeated inline comments; unresolved findings
 remain eligible for repair even when previously published.

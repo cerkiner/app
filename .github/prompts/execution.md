@@ -31,3 +31,7 @@ publisher. Keep summary to one short paragraph describing the useful result;
 put investigation detail, source paths, workflow/run identifiers and debugging
 guidance in investigated or unresolved. For issue/repair use
 review_status="not_applicable"; for issue use finding_verifications=[].
+
+For review file reads, use repository-relative paths such as
+src/app/app.component.ts. The broker also normalizes /workspace/... aliases;
+absolute paths outside the isolated repository are rejected.

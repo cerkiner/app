@@ -10,7 +10,7 @@ export function toolDefinitions(review) {
     inputSchema: { type: 'object', properties: { command: { type: 'string', maxLength: 20000 } }, required: ['command'], additionalProperties: false } }];
   return [
     { name: 'list_files', description: 'List repository files without executing repository code.', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
-    { name: 'read_file', description: 'Read up to 24000 bytes of a repository file, from a 1-based start line.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 } }, required: ['path'], additionalProperties: false } },
+    { name: 'read_file', description: 'Read up to 24000 bytes of a repository file, from a 1-based start line. Use a repository-relative path or /workspace/...; all reads stay inside the container repository.', inputSchema: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 } }, required: ['path'], additionalProperties: false } },
     { name: 'search', description: 'Search repository text using ripgrep, without executing code.', inputSchema: { type: 'object', properties: { pattern: { type: 'string', maxLength: 1000 } }, required: ['pattern'], additionalProperties: false } },
   ];
 }
@@ -20,11 +20,13 @@ export function toolArgv(name, args, review) {
   }
   if (review && name === 'list_files') return ['rg', '--files', '--hidden', '-g', '!.git', '-g', '!node_modules'];
   if (review && name === 'read_file') {
-    if (typeof args.path !== 'string' || args.path.startsWith('/') || args.path.split('/').some(p => p === '..') || /[\x00-\x1f]/.test(args.path)) throw new Error('Invalid repository path');
+    if (typeof args.path !== 'string') throw new Error('Invalid repository path');
+    const file = args.path.startsWith('/workspace/') ? args.path.slice('/workspace/'.length) : args.path;
+    if (!file || file.startsWith('/') || file.split('/').some(p => p === '..') || /[\x00-\x1f]/.test(file)) throw new Error('Invalid repository path');
     const start = args.start_line ?? 1;
     if (!Number.isSafeInteger(start) || start < 1) throw new Error('Invalid line');
     // resolve() inside the container also rejects symlinks outside /workspace.
-    return ['python3', '-c', 'import pathlib,sys; p=pathlib.Path(sys.argv[1]).resolve(); assert p.is_relative_to("/workspace"); f=p.open(); start=int(sys.argv[2]); print("".join(f.readlines()[start-1:start+299])[:24000])', args.path, String(start)];
+    return ['python3', '-c', 'import pathlib,sys; p=pathlib.Path(sys.argv[1]).resolve(); assert p.is_relative_to("/workspace"); f=p.open(); start=int(sys.argv[2]); print("".join(f.readlines()[start-1:start+299])[:24000])', file, String(start)];
   }
   if (review && name === 'search' && typeof args.pattern === 'string' && args.pattern.length <= 1000) return ['rg', '-n', '--hidden', '--max-count', '30', '-g', '!.git', '-g', '!node_modules', '--', args.pattern, '.'];
   throw new Error('Tool is not allowed in this mode');
@@ -65,7 +67,7 @@ if (process.argv[2] === '--serve') {
       if (request.method === 'tools/call' && process.argv[5]) {
         const content = response?.result?.content?.[0]?.text || '';
         const success = !response?.result?.isError && !response?.error && (!/^exit=(?!0(?:\n|$))/.test(content) || (request.params?.name === 'search' && /^exit=1(?:\n|$)/.test(content)));
-        appendFileSync(process.argv[5], JSON.stringify({ tool: request.params?.name, path: request.params?.arguments?.path, success, optional_instruction: /(?:^|\/)AGENTS\.md$/.test(request.params?.arguments?.path || '') }) + '\n');
+        appendFileSync(process.argv[5], JSON.stringify({ tool: request.params?.name, path: request.params?.arguments?.path, pattern: request.params?.arguments?.pattern, success, optional_instruction: /(?:^|\/)AGENTS\.md$/.test(request.params?.arguments?.path || '') }) + '\n');
       }
       if (response) process.stdout.write(JSON.stringify(response) + '\n');
     } catch { /* malformed transport input has no authority */ }
