@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       check_only:
-        description: Check encrypted connection and folder only (no uploads)
+        description: Check FTP connection and folder only (no uploads)
         type: boolean
         default: true
 

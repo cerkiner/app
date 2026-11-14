@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   publish:
+    name: ${{ inputs.check_only && 'Connection check' || 'Production deployment' }}
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -61,6 +62,9 @@ jobs:
           import os
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('Hostinger production\n\n')
+              if os.environ['RELEASE_STATUS'] == 'failure' and os.environ['RELEASE_CHECK_ONLY'] != 'true':
+                  summary.write('**Deployment failed; latest changes are not confirmed live.**\n\n')
+                  print('::error::Deployment failed; latest changes are not confirmed live. See the deployment incident for recovery steps.')
               for key in ('RELEASE_SHA', 'RELEASE_STATUS', 'RELEASE_SKIP', 'RELEASE_CHECK_ONLY'):
                   summary.write(f"- {key}: {os.environ[key]}\n")
               summary.write('- URL: https://sam.erkiner.com/app/\n')
