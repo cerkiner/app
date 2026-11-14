@@ -70,3 +70,26 @@ python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'
 
 Tests cover FTP connection behavior, credentials, folder checks, publication
 ordering, bounded retries, public-content mismatches and artifact provenance.
+
+## Failed production deployments
+
+A failed, timed-out or cancelled production publication is reported as
+**“Deployment failed; latest changes are not confirmed live.”** in the release
+summary and a dedicated deployment incident. The independent **Deployment
+incidents** workflow handles both automatic CI releases and manual uploads.
+It checks the completed run and publication job, so a failed PR build,
+pre-deployment validation failure or read-only connection check does not create
+a production incident.
+
+Each incident includes the workflow commit, failed run/attempt, failed job links,
+and instructions to retry a retained build or roll back. Code fixes go through
+a recovery PR; configuration and hosting problems can be corrected directly.
+Repeated failures of the same run update and reopen its existing incident.
+Confirm successful upload and public-file verification before closing it.
+Incidents are not automatically closed by a connection check or later build.
+
+Default-branch failures no longer enter the PR-only repair queue. The incident
+reporter has issue-write permission but no hosting secrets or code-write access.
+Automatic investigation and recovery PR creation are separate future work;
+creating an incident with the built-in GitHub token does not trigger the
+repository's issue-opened automation.
