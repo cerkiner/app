@@ -24,7 +24,7 @@ hosting root. Only the app folder may be accessible to the deployment account.
 
 | Name | GitHub setting | Value |
 | --- | --- | --- |
-| `HOSTINGER_FTP_HOST` | Secret | FTP hostname, without a URL or directory |
+| `HOSTINGER_FTP_HOST` | Secret | FTP hostname or `ftp://` / `ftps://` URL, without credentials or a folder path |
 | `HOSTINGER_FTP_USERNAME` | Secret | Full dedicated FTP username |
 | `HOSTINGER_FTP_PASSWORD` | Secret | Dedicated account password |
 | `HOSTINGER_FTP_PORT` | Secret | FTP port, defaults to `21` if omitted |

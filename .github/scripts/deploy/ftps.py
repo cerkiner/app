@@ -10,6 +10,7 @@ import ssl
 import sys
 import time
 import urllib.request
+from urllib.parse import urlsplit
 import uuid
 
 PUBLIC_URL = 'https://sam.erkiner.com/app/'
@@ -24,9 +25,16 @@ def config(env):
     values = [env.get('HOSTINGER_FTP_' + key, '') for key in ('HOST', 'USERNAME', 'PASSWORD')]
     if not all(values) or any('\n' in x or '\r' in x for x in values):
         raise DeploymentError('Missing or invalid FTP credentials')
-    if not re.fullmatch(r'[A-Za-z0-9.-]+', values[0]):
-        raise DeploymentError('FTP host must be a hostname, without a URL or path')
-    port = int(env.get('HOSTINGER_FTP_PORT', '21'))
+    host = urlsplit(values[0].strip() if '://' in values[0] else '//' + values[0].strip())
+    if (host.scheme not in ('', 'ftp', 'ftps') or not host.hostname
+            or host.username is not None or host.password is not None
+            or host.path not in ('', '/') or host.query or host.fragment):
+        raise DeploymentError('FTP host must be a hostname or FTP URL without credentials or a folder path')
+    try:
+        port = int(env.get('HOSTINGER_FTP_PORT') or host.port or 21)
+    except ValueError:
+        raise DeploymentError('FTP port must be a number') from None
+    values[0] = host.hostname
     if not 1 <= port <= 65535:
         raise DeploymentError('Invalid FTP port')
     return (*values, port)
