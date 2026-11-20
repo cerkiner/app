@@ -74,7 +74,8 @@ jobs:
             report_args=(--output-schema "$PR_REPORT_DIR/schema.json"
                          --output-last-message "$PR_REPORT_DIR/response.json")
           fi
-          # Let tools use the repository, but not the login file or Git metadata.
+          # The tool sandbox also needs to read the installed CLI runtime.
+          cli_dir="$(npm root -g)/@openai/codex"
           cat > "$CODEX_HOME/config.toml" <<EOF
           cli_auth_credentials_store = "file"
           forced_login_method = "chatgpt"
@@ -82,6 +83,7 @@ jobs:
           default_permissions = "task"
           [permissions.task.filesystem]
           ":minimal" = "read"
+          "$cli_dir" = "read"
           "$GITHUB_WORKSPACE" = "$access"
           "$GITHUB_WORKSPACE/.git" = "read"
           "$CODEX_HOME" = "deny"
