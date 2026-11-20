@@ -121,9 +121,9 @@ jobs:
         run: |
           git add --all
           if git diff --cached --quiet; then echo 'No changes to propose.'; exit 0; fi
-          # Read Codex's title and Markdown report from its structured response.
-          title="$(jq -er '.title' "$PR_REPORT_DIR/response.json")"
-          report="$(jq -er '.body' "$PR_REPORT_DIR/response.json")"
+          # Read the PR details; use a default only if that field cannot be read.
+          title="$(jq -er '.title' "$PR_REPORT_DIR/response.json")" || title="Repository update (run $GITHUB_RUN_ID)"
+          report="$(jq -er '.body' "$PR_REPORT_DIR/response.json")" || report='Completion report unavailable. Review the changes and run logs.'
           # Add the original request and run details without executing generated text.
           {
             printf '## Original request\n%s\n\n' "$TASK_PROMPT"
