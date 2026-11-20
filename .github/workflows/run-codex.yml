@@ -74,7 +74,8 @@ jobs:
             report_args=(--output-schema "$PR_REPORT_DIR/schema.json"
                          --output-last-message "$PR_REPORT_DIR/response.json")
           fi
-          # Let tools use the repository, but not the login file or Git metadata.
+          # The tool sandbox also needs to read the installed CLI runtime.
+          cli_dir="$(npm root -g)/@openai/codex"
           cat > "$CODEX_HOME/config.toml" <<EOF
           cli_auth_credentials_store = "file"
           forced_login_method = "chatgpt"
@@ -82,6 +83,7 @@ jobs:
           default_permissions = "task"
           [permissions.task.filesystem]
           ":minimal" = "read"
+          "$cli_dir" = "read"
           "$GITHUB_WORKSPACE" = "$access"
           "$GITHUB_WORKSPACE/.git" = "read"
           "$CODEX_HOME" = "deny"
@@ -108,7 +110,7 @@ jobs:
           jq -e '.auth_mode == "chatgpt" and .tokens.refresh_token != null' "$CODEX_HOME/auth.json" >/dev/null
           gh secret set CODEX_CHATGPT_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$CODEX_HOME/auth.json"
 
-      # 5. Publish available changes, even if the request, report, or login save failed.
+      # 5. Read the report and publish coding changes as a draft PR.
       - name: Open a draft PR
         if: ${{ !cancelled() && steps.request.outputs.coding == 'true' }}
         env:
@@ -119,15 +121,10 @@ jobs:
         run: |
           git add --all
           if git diff --cached --quiet; then echo 'No changes to propose.'; exit 0; fi
-          # Read Codex's title and report; fall back if the response is unavailable.
-          if ! title="$(jq -er '.title // empty' "$PR_REPORT_DIR/response.json" 2>/dev/null)" ||
-             ! report="$(jq -er '.body // empty' "$PR_REPORT_DIR/response.json" 2>/dev/null)" ||
-             [ -z "$title" ] || [ -z "$report" ]; then
-            title="Repository update (run $GITHUB_RUN_ID)"
-            report='A usable completion report was unavailable. Review the changes and run logs; work may be incomplete.'
-          fi
+          # Read the PR details; use a default only if that field cannot be read.
+          title="$(jq -er '.title' "$PR_REPORT_DIR/response.json")" || title="Repository update (run $GITHUB_RUN_ID)"
+          report="$(jq -er '.body' "$PR_REPORT_DIR/response.json")" || report='Completion report unavailable. Review the changes and run logs.'
           # Add the original request and run details without executing generated text.
-          mkdir -p "$PR_REPORT_DIR"
           {
             printf '## Original request\n%s\n\n' "$TASK_PROMPT"
             printf '## Report\n%s\n\n' "$report"
