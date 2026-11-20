@@ -1,0 +1,145 @@
+name: Codex task
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Optional coding task. Leave empty to maintain the login.
+        required: false
+        type: string
+  schedule:
+    - cron: '17 9 * * 1' # Monday, 09:17 UTC; no prompt means maintenance.
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# Never use the same login in two jobs at once.
+concurrency:
+  group: codex-login
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      CODEX_HOME: /tmp/codex-login
+    steps:
+      # 1. Put the selected branch and the CLI on the runner.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - run: npm install --global --ignore-scripts @openai/codex
+
+      # 2. Restore the whole login file. Keep it outside the repository.
+      - name: Restore login
+        env:
+          CODEX_CHATGPT_AUTH_JSON: ${{ secrets.CODEX_CHATGPT_AUTH_JSON }}
+        run: |
+          mkdir -p "$CODEX_HOME"
+          printf '%s' "$CODEX_CHATGPT_AUTH_JSON" > "$CODEX_HOME/auth.json"
+
+      # 3. A prompt edits code; no prompt makes a small, read-only login request.
+      - name: Run the request
+        id: request
+        env:
+          TASK_PROMPT: ${{ inputs.prompt }}
+          PR_REPORT_DIR: ${{ runner.temp }}/pr-report
+        run: |
+          access=read
+          report_args=()
+          if [ -z "$TASK_PROMPT" ]; then
+            TASK_PROMPT='Reply with the single word OK.'
+          else
+            access=write
+            echo 'coding=true' >> "$GITHUB_OUTPUT"
+            # Keep the report files outside both the checkout and the login folder.
+            mkdir -p "$PR_REPORT_DIR"
+            # Codex returns two fields: a PR title and a Markdown report.
+            cat > "$PR_REPORT_DIR/schema.json" <<'JSON'
+          {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "body": { "type": "string" }
+            },
+            "required": ["title", "body"],
+            "additionalProperties": false
+          }
+          JSON
+            # Coding runs save the final response to a temporary file; maintenance skips this.
+            report_args=(--output-schema "$PR_REPORT_DIR/schema.json"
+                         --output-last-message "$PR_REPORT_DIR/response.json")
+          fi
+          # Let tools use the repository, but not the login file or Git metadata.
+          cat > "$CODEX_HOME/config.toml" <<EOF
+          cli_auth_credentials_store = "file"
+          forced_login_method = "chatgpt"
+          approval_policy = "never"
+          default_permissions = "task"
+          [permissions.task.filesystem]
+          ":minimal" = "read"
+          "$GITHUB_WORKSPACE" = "$access"
+          "$GITHUB_WORKSPACE/.git" = "read"
+          "$CODEX_HOME" = "deny"
+          "$PR_REPORT_DIR" = "deny"
+          "/proc" = "deny"
+          [permissions.task.network]
+          enabled = false
+          EOF
+          # Pass the prompt as data; give the CLI no GitHub credentials.
+          {
+            printf '%s\n' "$TASK_PROMPT"
+            if [ "$access" = write ]; then
+              printf '\n%s\n' 'Complete the task above. Return a short, single-line, descriptive PR title and a Markdown body explaining what changed and why, checks actually run and their results, and anything incomplete or needing review. Never claim a check passed unless you ran it successfully.'
+            fi
+          } | env -i PATH="$PATH" HOME="$HOME" CODEX_HOME="$CODEX_HOME" \
+            codex exec "${report_args[@]}" -
+
+      # 4. Save the file Codex used, even if the request failed.
+      - name: Save login
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}
+        run: |
+          jq -e '.auth_mode == "chatgpt" and .tokens.refresh_token != null' "$CODEX_HOME/auth.json" >/dev/null
+          gh secret set CODEX_CHATGPT_AUTH_JSON --repo "$GITHUB_REPOSITORY" < "$CODEX_HOME/auth.json"
+
+      # 5. Publish available changes, even if the request, report, or login save failed.
+      - name: Open a draft PR
+        if: ${{ !cancelled() && steps.request.outputs.coding == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TASK_RESULT: ${{ steps.request.outcome }}
+          TASK_PROMPT: ${{ inputs.prompt }}
+          PR_REPORT_DIR: ${{ runner.temp }}/pr-report
+        run: |
+          git add --all
+          if git diff --cached --quiet; then echo 'No changes to propose.'; exit 0; fi
+          # Read Codex's title and report; fall back if the response is unavailable.
+          if ! title="$(jq -er '.title // empty' "$PR_REPORT_DIR/response.json" 2>/dev/null)" ||
+             ! report="$(jq -er '.body // empty' "$PR_REPORT_DIR/response.json" 2>/dev/null)" ||
+             [ -z "$title" ] || [ -z "$report" ]; then
+            title="Repository update (run $GITHUB_RUN_ID)"
+            report='A usable completion report was unavailable. Review the changes and run logs; work may be incomplete.'
+          fi
+          # Add the original request and run details without executing generated text.
+          mkdir -p "$PR_REPORT_DIR"
+          {
+            printf '## Original request\n%s\n\n' "$TASK_PROMPT"
+            printf '## Report\n%s\n\n' "$report"
+            printf '## Workflow\nRequest outcome: **%s**\n\n' "$TASK_RESULT"
+            printf '[Actions run](%s/%s/actions/runs/%s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > "$PR_REPORT_DIR/body.md"
+          branch="task-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "$title"
+          gh auth setup-git
+          git push --set-upstream origin "$branch"
+          gh pr create --draft --base "$GITHUB_REF_NAME" --head "$branch" \
+            --title "$title" --body-file "$PR_REPORT_DIR/body.md"
