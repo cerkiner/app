@@ -81,6 +81,8 @@ jobs:
           forced_login_method = "chatgpt"
           approval_policy = "never"
           default_permissions = "task"
+          [features]
+          network_proxy = true
           [permissions.task.filesystem]
           ":minimal" = "read"
           "$cli_dir" = "read"
@@ -89,8 +91,11 @@ jobs:
           "$CODEX_HOME" = "deny"
           "$PR_REPORT_DIR" = "deny"
           "/proc" = "deny"
+          # Permit public downloads through the proxy; narrow domains for sensitive repos.
           [permissions.task.network]
-          enabled = false
+          enabled = true
+          [permissions.task.network.domains]
+          "*" = "allow"
           EOF
           # Pass the prompt as data; give the CLI no GitHub credentials.
           {
