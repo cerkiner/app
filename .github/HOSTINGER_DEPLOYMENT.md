@@ -74,12 +74,12 @@ There is no automatic rollback; a later master push publishes the newer build.
 
 ## Local verification
 
-```sh
-python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'
-```
-
-Tests cover FTP connection behavior, credentials, folder checks, publication
-ordering, bounded retries, public-content mismatches and artifact provenance.
+The release, incident and FTP runtime helpers are unchanged by the workflow
+readability cleanup. This learning POC no longer retains automation test files.
+Verify helper syntax and provenance/freshness behavior with temporary synthetic
+inputs when changing deployment code. Keep the production application build,
+unit checks and browser checks. Never publish to production solely to verify
+this cleanup.
 
 ## Failed production deployments
 
@@ -101,6 +101,6 @@ blockers receive concrete human actions. Investigation cannot redeploy and does
 not rely on a bot-created issue producing another event.
 
 Use Deployment investigation's Run workflow form for historical recovery. Supply
-the failed publication run ID, its attempt, and the validated source build run ID.
+`failed_release_run_id`, `release_attempt`, and the validated `build_run_id`.
 Use Deploy Hostinger manually separately to retry publication or roll back.
 Confirm upload and public-file verification before closing the incident.

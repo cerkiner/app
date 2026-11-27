@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { gh, pages, repository, integer, output, sha } from './lib.mjs';
 
 export function documentationPath(file) {
-  return typeof file === 'string' && !/^(?:src\/|\.github\/prompts\/)/.test(file) &&
+  return typeof file === 'string' && !/^src\//.test(file) &&
     !/(?:^|\/)AGENTS\.md$/i.test(file) && (/\.md$/i.test(file) || /^(?:docs\/|LICENSE$)/.test(file));
 }
 export function documentationOnly(files, total) {

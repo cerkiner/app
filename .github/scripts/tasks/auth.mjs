@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, rmSync, lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
-import { AUTH_SECRET, WORK, command, gh, json, save, output, dispatch, repository, sha256, cleanEnvironment } from './lib.mjs';
-import { credentialsAreFresh } from './state.mjs';
+import { AUTH_SECRET, WORK, command, gh, json, save, output, repository, sha256, cleanEnvironment, integer, sha } from './lib.mjs';
+
+// GitHub reads repository secrets when a run is QUEUED, rather than when a
+// concurrency lock is acquired. Equality is stale too (timestamps have seconds).
+export function credentialsAreFresh(runCreatedAt, secretUpdatedAt) {
+  const created = Date.parse(runCreatedAt), updated = Date.parse(secretUpdatedAt);
+  if (!Number.isFinite(created) || !Number.isFinite(updated)) throw new Error('Missing credential freshness metadata');
+  return created > updated;
+}
 
 export function validateAuth(auth) {
   if ((auth.auth_mode !== undefined && auth.auth_mode !== 'chatgpt') || auth.OPENAI_API_KEY ||
@@ -18,6 +25,27 @@ export function readAuth() {
     return validateAuth(json(file));
   } catch { throw new Error('The current Codex auth file is missing, invalid or stored in an unexpected location. Reseed the subscription login.'); }
 }
+function redispatch(task, retries) {
+  const inputs = { login_retry_count: String(retries) };
+  let workflow;
+  if (task.kind === 'issue') {
+    workflow = 'issue-tasks.yml';
+    inputs.issue_number = String(integer(task.target));
+  } else if (task.kind === 'deployment') {
+    workflow = 'deployment-investigation.yml';
+    Object.assign(inputs, { failed_release_run_id: String(integer(task.target)),
+      release_attempt: String(integer(task.source_attempt)), build_run_id: String(integer(task.deployment.source_build)) });
+  } else if (['review', 'ci-repair', 'review-repair'].includes(task.kind)) {
+    workflow = 'pr-follow-up.yml';
+    Object.assign(inputs, { task: task.kind, pr_number: String(integer(task.number)), expected_head_sha: sha(task.head_sha),
+      checks_run_id: task.source_run_id || task.ci_run_id ? String(integer(task.source_run_id || task.ci_run_id)) : '',
+      review_id: task.review_id ? String(integer(task.review_id)) : '', reset_repair_budget: String(task.new_cycle),
+      budget_reset_run_id: task.cycle_request ? String(integer(task.cycle_request)) : '' });
+  } else throw new Error('Cannot recover an unknown task');
+  gh(`repos/${task.repo}/actions/workflows/${workflow}/dispatches`, {
+    method: 'POST', body: { ref: task.default_branch, inputs },
+  });
+}
 async function main() {
   const action = process.argv[2], repo = repository(process.env.GH_REPO);
   if (action === 'restore') {
@@ -28,12 +56,12 @@ async function main() {
     try { metadata = gh(`repos/${repo}/actions/secrets/${AUTH_SECRET}`); }
     catch { throw new Error('Cannot read Codex secret metadata. Check CODEX_GITHUB_AUTH_PAT expiry, repository access and Secrets: read/write permission.'); }
     if (!credentialsAreFresh(task.created_at, metadata.updated_at)) {
-      const hops = Number(process.env.CODEX_REFRESH_HOPS || 0);
+      const hops = Number(process.env.TASK_LOGIN_RETRY_COUNT || 0);
       if (!Number.isInteger(hops) || hops < 0 || hops >= 12) throw new Error('Credentials changed while queued repeatedly. Redispatch this task after the queue drains.');
       // Use the separate job token for workflow dispatch; CODEX_GITHUB_AUTH_PAT needs Secrets only.
       const previous = process.env.GH_TOKEN;
-      process.env.GH_TOKEN = process.env.CODEX_DISPATCH_TOKEN;
-      try { dispatch(repo, task.mode, task.target, task.mode === 'issue' ? '' : task.head_sha, hops + 1, task.new_cycle, task.cycle_request, { source: task.repair_source, review_id: task.review_id, source_run: task.source_run_id, source_attempt: task.source_attempt, source_build: task.deployment?.source_build }); }
+      process.env.GH_TOKEN = process.env.TASK_DISPATCH_TOKEN;
+      try { redispatch(task, hops + 1); }
       finally { process.env.GH_TOKEN = previous; }
       save(path.join(WORK, 'artifacts/authentication.json'), { persistence: 'not_attempted', reason: 'Redispatched this task because its queued login snapshot was stale.' });
       output('ready', 'false');

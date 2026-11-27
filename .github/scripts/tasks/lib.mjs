@@ -79,23 +79,6 @@ export function comment(repo, number, record, text, id) {
 export function publicText(value) {
   return bounded(value, 24000).replace(/<!--[\s\S]*?-->/g, '').replace(/@(?=[A-Za-z0-9_])/g, '@\u200b');
 }
-export function dispatch(repo, mode, target, expectedSha = '', hops = 0, newCycle = false, cycleRequest = '', repair = {}) {
-  if (!['issue', 'review', 'repair', 'deployment'].includes(mode)) throw new Error('Invalid task mode');
-  const workflow = mode === 'issue' ? 'issue-tasks.yml' : mode === 'deployment' ? 'deployment-investigation.yml' : TASK_WORKFLOW;
-  const inputs = { target: String(integer(target)), refresh_hops: String(hops) };
-  if (mode === 'deployment') { inputs.source_attempt = String(integer(repair.source_attempt)); inputs.source_build = String(integer(repair.source_build)); }
-  if (mode === 'review' || mode === 'repair') Object.assign(inputs, {
-    mode, expected_sha: expectedSha ? sha(expectedSha) : '', new_cycle: String(newCycle),
-    cycle_request: cycleRequest ? String(integer(cycleRequest)) : '', repair_source: repair.source || 'ci',
-    review_id: repair.review_id ? String(integer(repair.review_id)) : '',
-    source_run: repair.source_run ? String(integer(repair.source_run)) : '',
-  });
-  gh(`repos/${repo}/actions/workflows/${workflow}/dispatches`, {
-    method: 'POST', body: { ref: process.env.CODEX_DEFAULT_BRANCH || 'master', inputs: {
-      ...inputs,
-    } },
-  });
-}
 export function redactor(values = []) {
   const secrets = values.filter(v => typeof v === 'string' && v.length >= 8).sort((a, b) => b.length - a.length);
   return value => {

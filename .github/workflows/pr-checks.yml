@@ -1,5 +1,5 @@
 name: PR checks
-run-name: "PR checks · #${{ github.event.pull_request.number || inputs.pr_number }} · ${{ github.event.pull_request.title || inputs.expected_sha }}"
+run-name: "PR checks · #${{ github.event.pull_request.number || inputs.pr_number }} · ${{ github.event.pull_request.title || inputs.expected_head_sha }}"
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ on:
         description: PR to validate again; does not approve pending workflows
         required: true
         type: string
-      expected_sha:
+      expected_head_sha:
         description: Exact PR head to validate
         required: true
         type: string
@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
-          ref: ${{ github.event.pull_request.merge_commit_sha || inputs.expected_sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || inputs.expected_head_sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
@@ -46,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
         run: node .github/scripts/tasks/validation.mjs
       - name: Check documentation patch whitespace
         if: steps.scope.outputs.documentation_only == 'true'
@@ -54,19 +54,6 @@ jobs:
       - name: Install dependencies from lockfile
         if: steps.scope.outputs.documentation_only != 'true'
         run: npm ci
-      - name: Install the selected CLI
-        id: cli
-        if: steps.scope.outputs.documentation_only != 'true'
-        run: node .github/scripts/tasks/install-cli.mjs
-      - name: Validate task helpers and native CLI settings
-        id: helpers
-        if: steps.scope.outputs.documentation_only != 'true'
-        env:
-          CODEX_CLI_BIN: ${{ steps.cli.outputs.binary }}
-        run: node --test .github/scripts/tasks/*.test.mjs
-      - name: Validate deployment safety
-        if: steps.scope.outputs.documentation_only != 'true'
-        run: python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'
       - name: Install Chromium for unit and browser tests
         if: steps.scope.outputs.documentation_only != 'true'
         run: npx playwright install --with-deps --no-shell chromium

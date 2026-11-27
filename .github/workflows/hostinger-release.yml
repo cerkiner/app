@@ -87,9 +87,9 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/deployment-investigation.yml
     with:
-      target: ${{ github.run_id }}
-      source_attempt: ${{ github.run_attempt }}
-      source_build: ${{ inputs.run_id }}
+      failed_release_run_id: ${{ github.run_id }}
+      release_attempt: ${{ github.run_attempt }}
+      build_run_id: ${{ inputs.run_id }}
     secrets:
       CODEX_CHATGPT_AUTH_JSON: ${{ secrets.CODEX_CHATGPT_AUTH_JSON }}
       CODEX_GITHUB_AUTH_PAT: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}

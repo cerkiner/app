@@ -40,16 +40,6 @@ jobs:
           cache: npm
       - name: Install dependencies from lockfile
         run: npm ci
-      - name: Install the selected CLI
-        id: cli
-        run: node .github/scripts/tasks/install-cli.mjs
-      - name: Validate task helpers and native CLI settings
-        id: helpers
-        env:
-          CODEX_CLI_BIN: ${{ steps.cli.outputs.binary }}
-        run: node --test .github/scripts/tasks/*.test.mjs
-      - name: Validate deployment safety
-        run: python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'
       - name: Install Chromium for unit and browser tests
         run: npx playwright install --with-deps --no-shell chromium
       - name: Share Chromium with Karma

@@ -13,8 +13,8 @@ use API billing, approve PRs, merge code, or deploy from a model session.
 | App release | Production-relevant master push | Validate and publish the retained build |
 | Deployment investigation | Failed publication job, or manual recovery | Update the incident and investigate without redeploying |
 
-Issue work runs directly in its workflow. Review and CI repair have different
-prompts and fresh sessions. A passing-CI review can start a fresh repair session
+Issue work runs directly in its workflow. Instructions are literal YAML blocks beside each execution step. Review and CI
+repair have different prompts and fresh sessions. A passing-CI review can start a fresh repair session
 inside the same follow-up run. A fix returns through normal PR checks. No source
 change means no new commit, CI request, or release. Documentation receives review
 for coherence, links, examples and consistency with the application.
@@ -48,7 +48,10 @@ Use the existing repository secrets:
 Authentication is restored outside the project with private directory/file
 permissions. The CLI uses that actual file; refreshed contents are piped directly
 to `gh secret set` through stdin. All fields are preserved. Digests avoid unchanged
-writes. Persistence runs after failures as well, and reports saved, unchanged,
+writes. After every model session, persist the actual login file even if the task
+failed, provided authentication was restored. Always clean up afterward. Use the
+existing persistence and cleanup steps. This includes read-only reviews. A review
+followed by repair saves after each session. Persistence reports saved, unchanged,
 failed or not attempted. The CLI environment receives neither the PAT nor the
 publication token. Hosting credentials exist only in the publication step.
 
@@ -76,8 +79,9 @@ opportunity to refresh, not a guarantee of permanent validity.
 ## Native execution
 
 The CLI version is `0.169.0`, defined once in `scripts/tasks/execution.mjs` and used
-by the installer and tests. Accepted default-branch code generates the TOML
-settings outside the proposed workspace. The native CLI receives those settings
+by installation and execution version checks. Only Issue tasks, PR review and
+repair, and Deployment investigation install it. Accepted default-branch code
+generates the TOML settings outside the proposed workspace. The native CLI receives those settings
 explicitly and ignores ambient user configuration and execution rules.
 
 Implementation, repair and deployment investigation can edit the project and
@@ -121,37 +125,69 @@ Forks receive read-only reviews. Protected/default branches are never repaired
 directly. Hosting, credential and infrastructure blockers receive concrete human
 actions instead of invented code fixes or repeated attempts.
 
+## Runtime helpers
+
+The task runtime folder contains six modules and the structured response schema.
+There are no external prompt files, automation test files or fixtures.
+
+| Helper | Purpose |
+| --- | --- |
+| auth.mjs | Restore the raw login, reject stale queued copies, save changes and clean up. |
+| execution.mjs | Install the pinned CLI and run a fresh session with native permissions. |
+| tasks.mjs | Collect GitHub context, check eligibility and publish results or changes. |
+| state.mjs | Track duplicates, repair budgets, durable reservations and review records. |
+| lib.mjs | Supply shared GitHub, validation, filesystem and redaction utilities. |
+| validation.mjs | Classify complete changed-file metadata for documentation validation. |
+
+The YAML chooses which task runs. Explicit preparation commands check that task's
+inputs and eligibility. Publication emits actionable review findings; a later YAML
+step decides whether to prepare and run a separate repair. Helpers retain the
+substantial credential, GitHub and publication operations. The existing Python
+release, incident and FTP helpers remain unchanged.
+
 ## Manual recovery
 
 Use the standard Run workflow forms on the default branch. These are recovery
 requests, not approval commands. Approve held PR checks with the PR-page button.
 
-- Issue tasks: supply the issue number as `target`.
-- PR review and repair: `mode=review`, `target=PR_NUMBER`, and optionally the exact
-  `expected_sha` and successful `source_run`.
-- CI repair: `mode=repair`, `target=FAILED_PR_CHECKS_RUN_ID`; `new_cycle=true` is an
-  explicit maintainer budget reset.
-- Review repair recovery: `mode=repair`, `target=PR_NUMBER`, `repair_source=review`,
-  `review_id=REVIEW_ID`, and `expected_sha=REVIEWED_SHA`.
+- Issue tasks: supply `issue_number`.
+- PR review and repair: choose `task=review` and supply `pr_number`. Optionally
+  constrain it with `expected_head_sha` and a successful `checks_run_id`.
+- CI repair: choose `task=ci-repair`, supply `pr_number` and `checks_run_id`.
+  `reset_repair_budget=true` explicitly requests a new maintainer-authorized budget.
+- Review repair: choose `task=review-repair`, supply `pr_number`, `review_id`, and
+  the exact reviewed `expected_head_sha`.
 - PR checks: choose the PR branch as ref, supply `pr_number` and its exact
-  `expected_sha`. This reruns validation and does not approve a pending run.
-- Deployment investigation: supply `target=FAILED_PUBLICATION_RUN_ID`, its
-  `source_attempt`, and `source_build=VALIDATED_BUILD_RUN_ID`. Manual deployment
-  workflow and artifact revisions can differ. Investigation never redeploys.
+  `expected_head_sha`. This reruns validation and does not approve a pending run.
+- Deployment investigation: supply `failed_release_run_id`, `release_attempt`,
+  and `build_run_id`. The failed workflow and artifact revisions can differ.
+  Investigation never redeploys.
+
+Leave `login_retry_count` at zero and `budget_reset_run_id` blank. These fields
+preserve bounded stale-login recovery and the original authorized reset request.
+The same-workflow retry carries the task, revision and source identifiers forward.
+
+For example, investigate the verified historical publication failure without
+uploading anything:
+
+```sh
+gh workflow run deployment-investigation.yml --repo cerkiner/app --ref master \
+  -f failed_release_run_id=43568290275 -f release_attempt=1 -f build_run_id=43568290275
+```
 
 ## Verification and rollout
 
-Run `node --test .github/scripts/tasks/*.test.mjs` and
-`python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'`.
-Set `CODEX_CLI_BIN` to the pinned executable to enable local-only strict-parser
-checks. Ubuntu additionally runs a few native permission checks: permitted project
-work, denied synthetic login reads, denied review writes and command networking.
-All inference contract requests go to a local failing stub, without live login or
-API billing. No large isolation framework or custom bridge is introduced.
-
-PR checks install the same pinned executable and run those checks on Ubuntu.
+This learning POC intentionally omits automation test suites and fixtures. They
+are not needed to execute the workflows. Runtime result validation, permission
+checks, authenticated state, repair budgets and publication guards remain.
 The normal application build, unit suite and browser suite remain in validation.
-Report concrete CLI or runner limitations instead of loosening permissions.
+PR checks and App release no longer install the model CLI.
+
+During this cleanup, establish the existing test baseline before deletion, check
+module imports and workflow syntax, then use temporary synthetic data for focused
+authentication, state, revision and CLI verification. Report concrete CLI or runner
+limitations instead of loosening permissions. These development checks do not
+establish that a real subscription login or end-to-end task succeeds.
 
 After merge, wait for the shared login queue to drain, then open a controlled
 README-only issue. Verify a real task, credential persistence, PR-page approval
