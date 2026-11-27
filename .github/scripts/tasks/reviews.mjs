@@ -29,15 +29,14 @@ export function validateReviewRequest(review, head, input) {
   if (input) {
     let supplied;
     try { supplied = JSON.parse(input); } catch { throw new Error('Invalid structured review request'); }
-    if (JSON.stringify(supplied) !== JSON.stringify(findings)) throw new Error('Dispatched findings differ from the published review');
+    if (JSON.stringify(supplied) !== JSON.stringify(findings)) throw new Error('Requested findings differ from the published review');
   }
   return { record, findings };
 }
 export function requestReviewRepair(task, review, record, queue, api) {
   const findings = actionableFindings(record.findings);
   if (!findings.length || record.repair_requested) return false;
-  queue(task.repo, 'repair', task.number, task.head_sha, 0, false, '',
-    { source: 'review', review_id: integer(review.id), findings });
+  queue({ target: task.number, head: task.head_sha, source: 'review', review_id: integer(review.id), findings });
   // The same workflow prepares a fresh session. Durable request keys prevent
   // duplicate repairs after interrupted publication or a retried review.
   const updated = { ...record, repair_requested: true };

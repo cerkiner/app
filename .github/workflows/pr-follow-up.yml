@@ -149,7 +149,7 @@ jobs:
         run: node .github/scripts/tasks/execution.mjs
       - name: Save the actual login after repair or failure
         id: persist_repair
-        if: always() && steps.auth.outputs.restored == 'true'
+        if: always() && steps.auth.outputs.restored == 'true' && steps.repair.outputs.proceed == 'true'
         env:
           GH_TOKEN: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}
         run: node .github/scripts/tasks/auth.mjs persist
@@ -163,7 +163,7 @@ jobs:
         if: always()
         run: node .github/scripts/tasks/auth.mjs cleanup
       - name: Report an incomplete task
-        if: failure() && steps.auth.outputs.restored == 'true'
+        if: failure() && (steps.prepare.outputs.proceed == 'true' || steps.prepare.outputs.repair_pending == 'true')
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/tasks/tasks.mjs report-failure

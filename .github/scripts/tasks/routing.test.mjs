@@ -121,5 +121,7 @@ test('persistence still saves a rotated raw file after task setup fails', t => {
   assert.notEqual(f.run('execution.mjs', '').status, 0);
   const persisted = f.run('auth.mjs', 'persist'); assert.equal(persisted.status, 0, persisted.stderr);
   assert.deepEqual(JSON.parse(readFileSync(path.join(f.dir, 'saved-secret'))), rotated);
+  assert.equal(f.run('auth.mjs', 'persist').status, 0);
+  assert.equal(f.calls().filter(call => call.args[0] === 'secret').length, 1);
   assert.equal(JSON.parse(readFileSync(path.join(f.work, 'artifacts/authentication.json'))).persistence, 'saved');
 });

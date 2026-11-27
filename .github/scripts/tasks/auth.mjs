@@ -55,7 +55,9 @@ async function main() {
     if (!existsSync(path.join(WORK, 'auth-restored.json')) || !existsSync(authFile())) throw new Error('Restored authentication file is missing; credential persistence cannot continue');
     readAuth();
     if (sha256(readFileSync(authFile())) === json(path.join(WORK, 'auth-restored.json')).digest) {
-      save(path.join(WORK, 'artifacts/authentication.json'), { persistence: 'unchanged' });
+      const status = path.join(WORK, 'artifacts/authentication.json');
+      const saved = existsSync(status) && json(status).persistence === 'saved';
+      save(status, { persistence: saved ? 'saved' : 'unchanged' });
       console.log('Codex credentials are unchanged; the stored secret is already current.');
       return;
     }
@@ -75,4 +77,4 @@ async function main() {
     rmSync(path.join(WORK, 'session'), { recursive: true, force: true });
   } else throw new Error('Unknown auth action');
 }
-if (process.argv[1] === import.meta.filename) main().catch(error => { if (process.argv[2] === 'persist') save(path.join(WORK, 'artifacts/authentication.json'), { persistence: 'failed' }); console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] === import.meta.filename) main().catch(error => { save(path.join(WORK, 'artifacts/error.json'), { message: error.message, category: 'authentication_' + process.argv[2] }); if (process.argv[2] === 'persist') save(path.join(WORK, 'artifacts/authentication.json'), { persistence: 'failed' }); console.error(error.message); process.exitCode = 1; });

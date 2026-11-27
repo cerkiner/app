@@ -53,8 +53,8 @@ function verifyRun(run, repo, workflow, name) {
   sha(run.head_sha);
 }
 
-function localRepair(repo, mode, target, head, hops, newCycle, cycleRequest, repair) {
-  save(path.join(WORK, 'repair-request.json'), { target, head, ...repair });
+function localRepair(request) {
+  save(path.join(WORK, 'repair-request.json'), request);
   output('repair_pending', 'true');
 }
 export const approvalGuidance = 'If GitHub shows Approve workflows to run, select it on this PR to start CI. Code review and merging remain separate maintainer decisions.';
@@ -150,8 +150,9 @@ async function prepare({ continuation = false } = {}) {
       const existingReview = reviews.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
       if (existingReview) {
         const record = publishedReview(existingReview, task.head_sha);
+        task.skip_reason = 'This revision already has a completed independent review.';
         save(taskFile, task);
-        if (actionableFindings(record.findings).length) localRepair(repo, 'repair', pr.number, task.head_sha, 0, false, '', { source: 'review', review_id: existingReview.id });
+        if (actionableFindings(record.findings).length) localRepair({ target: pr.number, head: task.head_sha, source: 'review', review_id: existingReview.id });
         return;
       }
     }
@@ -321,7 +322,7 @@ async function publishReview(task, result) {
   const existing = prior.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
   if (existing) {
     const record = publishedReview(existing, task.head_sha);
-    if (record && actionableFindings(record.findings).length) localRepair(task.repo, 'repair', task.number, task.head_sha, 0, false, '', { source: 'review', review_id: existing.id });
+    if (record && actionableFindings(record.findings).length) localRepair({ target: task.number, head: task.head_sha, source: 'review', review_id: existing.id });
     return;
   }
   if (task.context.pr.diff_is_partial) {
@@ -453,11 +454,13 @@ async function main() {
       return [mode + ': ' + result.outcome + (mode === 'review' ? ' (' + result.review_status + ')' : ''), ...result.tests.map(t => t.status + ': ' + t.command)];
     });
     const authState = existsSync(auth) ? json(auth) : {};
+    const failureFile = path.join(ARTIFACTS, 'error.json');
+    const reason = existsSync(failureFile) ? 'Failed: ' + json(failureFile).message : authState.reason || task.skip_reason || 'No model execution was completed. The request was skipped or superseded; see eligibility details.';
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, '# Repository task\n\n' + [
       'Trigger: ' + process.env.GITHUB_EVENT_NAME, 'Task: ' + (task.mode || process.env.CODEX_MODE),
       'Target: ' + (task.number || process.env.CODEX_TARGET), 'Revision: ' + (task.head_sha || 'not selected'),
       'Authentication persistence: ' + persistence, ...results,
-      ...(!results.length ? [authState.reason || 'No completed model result. The request was skipped, superseded, incomplete, or failed; see the steps above.'] : []),
+      ...(!results.length ? [reason] : []),
     ].map(line => '- ' + publicText(line).replace(/[\r\n]/g, ' ')).join('\n') + '\n');
     return;
   }
