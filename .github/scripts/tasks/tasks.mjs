@@ -47,9 +47,12 @@ async function associatedPRs(repo, run) {
   return result;
 }
 function verifyRun(run, repo, workflow, name) {
-  if (run.repository?.full_name !== repo || run.path !== `.github/workflows/${workflow}` || run.name !== name || run.status !== 'completed') throw new Error('Workflow run provenance does not match the configured workflow');
+  if (run.repository?.full_name !== repo || run.path !== `.github/workflows/${workflow}` || run.status !== 'completed') throw new Error('Workflow run provenance does not match the configured workflow');
+  const definition = gh(`repos/${repo}/actions/workflows/${workflow}`);
+  if (definition.id !== run.workflow_id || definition.path !== run.path || definition.name !== name) throw new Error('Workflow identity does not match the accepted task flow');
   sha(run.head_sha);
 }
+
 function localRepair(repo, mode, target, head, hops, newCycle, cycleRequest, repair) {
   save(path.join(WORK, 'repair-request.json'), { target, head, ...repair });
   output('repair_pending', 'true');
@@ -196,8 +199,9 @@ async function prepare({ continuation = false } = {}) {
       if (sourceReview && currentReview && currentReview.id !== sourceReview.id) return;
       if (!ci && sourceReview) {
         const candidates = gh(`repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${task.head_sha}&status=failure&per_page=10`).workflow_runs || [];
-        ci = candidates.find(run => run.head_sha === task.head_sha && run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === `.github/workflows/${CI_WORKFLOW}` && run.name === 'PR checks' && run.status === 'completed' && run.conclusion === 'failure');
+        ci = candidates.find(run => run.head_sha === task.head_sha && run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === `.github/workflows/${CI_WORKFLOW}` && run.status === 'completed' && run.conclusion === 'failure');
       }
+      if (ci) verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
       let failed = [];
       if (ci) {
         const jobs = pages(`repos/${repo}/actions/runs/${ci.id}/attempts/${ci.run_attempt}/jobs?per_page=100`).flatMap(p => p.jobs || []);

@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:
 import path from 'node:path';
 import os from 'node:os';
 import { CLI_VERSION, cliArgs, settings } from './execution.mjs';
-import { command } from './lib.mjs';
+import { command, ROOT } from './lib.mjs';
 
 // No subscription login or remote inference. Enable with the pinned executable.
 for (const mode of ['issue', 'review']) test(`pinned CLI strictly parses the native ${mode} configuration`, {
@@ -78,8 +78,8 @@ test('Ubuntu native profiles permit project work and deny login reads, review wr
     return spawnSync(binary, [...args, '--', process.execPath, '-e', script], {
       env: { PATH: process.env.PATH, HOME: process.env.HOME, CODEX_HOME: credentials }, encoding: 'utf8', timeout: 10000 });
   }
-  const allowed = run('issue', 'const fs=require("fs");fs.writeFileSync("build.txt",String(2+2));if(fs.readFileSync("build.txt","utf8")!=="4")process.exit(2)');
-  assert.equal(allowed.status, 0, allowed.stderr); assert.ok(existsSync(path.join(project, 'build.txt')));
+  const allowed = run('issue', `const fs=require('fs'),ts=require(${JSON.stringify(path.join(ROOT, 'node_modules/typescript'))});fs.writeFileSync('source.ts','const total: number = 2 + 2; module.exports = total;');fs.writeFileSync('build.cjs',ts.transpile(fs.readFileSync('source.ts','utf8')));require('node:assert/strict').equal(require(process.cwd()+'/build.cjs'),4);`);
+  assert.equal(allowed.status, 0, allowed.stderr); assert.ok(existsSync(path.join(project, 'build.cjs')));
   for (const mode of ['issue','review']) {
     const denied = run(mode, `try {require('fs').readFileSync(${JSON.stringify(protectedFile)});process.exit(2)} catch(e) {if(!['EACCES','EPERM'].includes(e.code))throw e}`);
     assert.equal(denied.status, 0, denied.stderr);

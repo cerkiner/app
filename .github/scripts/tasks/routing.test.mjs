@@ -41,6 +41,14 @@ test('another workflow cannot authorize a follow-up by copying the PR check name
   const f = fixture(t, responses), run = f.run('tasks.mjs', 'prepare', event);
   assert.notEqual(run.status, 0); assert.ok(!existsSync(path.join(f.work, 'task.json')));
 });
+test('descriptive run titles are allowed but a mismatched workflow ID is rejected', t => {
+  const responses = data('success'); responses['repos/owner/repo/actions/runs/123'].name = 'PR checks #1 - Documentation update';
+  const f = fixture(t, responses); assert.equal(f.run('tasks.mjs', 'prepare', event).status, 0);
+  responses['repos/owner/repo/actions/runs/123'].workflow_id = 2;
+  writeFileSync(path.join(f.dir, 'responses.json'), JSON.stringify({ ...responses,
+    'repos/owner/repo/actions/workflows/pr-checks.yml': { id: 1, path: '.github/workflows/pr-checks.yml', name: 'PR checks' } }));
+  assert.notEqual(f.run('tasks.mjs', 'prepare', event).status, 0);
+});
 test('review waits until the originating task has finished publication', t => {
   const responses = data('success');
   responses['repos/owner/repo/pulls/1'].user = { login: BOT, type: 'Bot' };

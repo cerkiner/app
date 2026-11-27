@@ -1,5 +1,5 @@
 name: PR review and repair
-run-name: ${{ github.event.workflow_run.conclusion == 'success' && 'PR review' || github.event.workflow_run.conclusion == 'failure' && 'CI repair' || 'PR follow-up' }} · ${{ github.event.workflow_run.display_title || inputs.target }}
+run-name: "${{ github.event.workflow_run.conclusion == 'success' && 'PR review' || github.event.workflow_run.conclusion == 'failure' && 'CI repair' || 'PR follow-up' }} · ${{ github.event.workflow_run.display_title || inputs.target }}"
 
 on:
   workflow_run:

@@ -1,5 +1,5 @@
 name: App release
-run-name: App release · ${{ github.event.head_commit.message }}
+run-name: "App release · ${{ github.event.head_commit.message }}"
 
 on:
   push:

@@ -31,7 +31,7 @@ def pages(path, key=None):
 
 
 def publication_failures(run, jobs, repo, branch, allow_active=False):
-    workflow = WORKFLOWS.get(run.get('name'))
+    workflow = next((value for value in WORKFLOWS.values() if run.get('path') == '.github/workflows/' + value[0]), None)
     active = allow_active and run.get('status') == 'in_progress'
     if (not workflow or run.get('path') != '.github/workflows/' + workflow[0]
             or run.get('event') != workflow[1]
@@ -54,7 +54,7 @@ def report(repo, branch, run, failed, build=None):
     run_url = f'https://github.com/{repo}/actions/runs/{run_id}/attempts/{attempt}'
     manual = f'https://github.com/{repo}/actions/workflows/deploy-hostinger.yml'
     steps = '\n'.join(f'- {job["html_url"]}' for job in failed)
-    source = (f'Use CI run ID `{run_id}` as the source build.' if run['name'] in ('CI', 'App release') else
+    source = (f'Use CI run ID `{run_id}` as the source build.' if run['path'] == '.github/workflows/CI.yml' else
               'Use the source CI run ID from the failed manual run inputs; its workflow commit may differ from the artifact commit.')
     body = f"""{marker}
 **{STATUS}**
@@ -120,9 +120,13 @@ def main():
     if not failed:
         print('No attempted production publication failure; no investigation needed')
         return
+    definition = api(f"repos/{repo}/actions/workflows/{run['path'].split('/')[-1]}")
+    if run.get('workflow_id') != definition.get('id') or run['path'] != definition.get('path'):
+        raise ValueError('Publication workflow identity changed')
     build = api(f'repos/{repo}/actions/runs/{build_id}')
+    build_definition = definition if run['path'] == '.github/workflows/CI.yml' else api(f'repos/{repo}/actions/workflows/CI.yml')
     if (build.get('path') != '.github/workflows/CI.yml' or build.get('event') != 'push'
-            or build.get('name') not in ('CI', 'App release') or build.get('head_branch') != 'master'
+            or build.get('workflow_id') != build_definition.get('id') or build.get('head_branch') != 'master'
             or build.get('repository', {}).get('full_name') != repo
             or build.get('head_repository', {}).get('full_name') != repo
             or not re.fullmatch(r'[0-9a-f]{40}', build.get('head_sha', ''))

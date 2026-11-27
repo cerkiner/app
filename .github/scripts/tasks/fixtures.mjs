@@ -10,7 +10,7 @@ export function fixture(t, responses = {}) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'bin'), work = path.join(dir, 'work');
   mkdirSync(bin); mkdirSync(work);
-  responses = { 'repos/owner/repo/pulls?state=all&head=owner%3Acodex%2Fissue-1&per_page=100': [], ...responses };
+  responses = { 'repos/owner/repo/actions/workflows/pr-checks.yml': { id: 1, path: '.github/workflows/pr-checks.yml', name: 'PR checks' }, 'repos/owner/repo/pulls?state=all&head=owner%3Acodex%2Fissue-1&per_page=100': [], ...responses };
   writeFileSync(path.join(dir, 'responses.json'), JSON.stringify(responses));
   writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'); const root = ${JSON.stringify(dir)}; const args = process.argv.slice(2);
@@ -40,7 +40,7 @@ export function repairResponses(history = [], { head = a, protectedBranch = fals
   return {
     'repos/owner/repo': { visibility: 'private', default_branch: 'master' },
     'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z', path: '.github/workflows/pr-follow-up.yml', event: 'workflow_dispatch', actor: { login: 'maintainer', type: 'User' } },
-    'repos/owner/repo/actions/runs/123': { id: 123, run_attempt: 1, repository: { full_name: 'owner/repo' },
+    'repos/owner/repo/actions/runs/123': { id: 123, workflow_id: 1, run_attempt: 1, repository: { full_name: 'owner/repo' },
       head_repository: { full_name: 'owner/repo' }, head_sha: head, name: 'PR checks', path: '.github/workflows/pr-checks.yml', status: 'completed',
       conclusion: 'failure', event: 'pull_request', pull_requests: [{ number: 1 }], html_url: 'https://github.com/owner/repo/actions/runs/123' },
     'repos/owner/repo/pulls/1': { number: 1, state: 'open', title: 'Fix', body: '', user: { login: 'maintainer', type: 'User' },

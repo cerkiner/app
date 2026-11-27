@@ -1,5 +1,5 @@
 name: Deployment investigation
-run-name: Investigate publication · run ${{ inputs.target }} · attempt ${{ inputs.source_attempt }}
+run-name: "Investigate publication · run ${{ inputs.target }} · attempt ${{ inputs.source_attempt }}"
 
 on:
   workflow_call:

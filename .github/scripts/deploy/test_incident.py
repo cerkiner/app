@@ -11,7 +11,7 @@ import incident
 
 class IncidentTests(unittest.TestCase):
     def setUp(self):
-        self.run = dict(id=123, run_attempt=1, name='CI', path='.github/workflows/CI.yml',
+        self.run = dict(id=123, workflow_id=1, run_attempt=1, name='CI', path='.github/workflows/CI.yml',
                         event='push', status='completed', conclusion='failure', head_branch='master',
                         head_sha='a' * 40, repository={'full_name': 'owner/app'},
                         head_repository={'full_name': 'owner/app'})
@@ -79,7 +79,7 @@ class IncidentTests(unittest.TestCase):
             event.write_text(json.dumps({'action': 'completed', 'repository': {'full_name': 'owner/app', 'default_branch': 'master'}, 'workflow_run': {'id': 123}}))
             summary = Path(directory) / 'summary'
             env = dict(GITHUB_EVENT_NAME='workflow_run', GITHUB_EVENT_PATH=str(event), GITHUB_STEP_SUMMARY=str(summary), GITHUB_REPOSITORY='owner/app', INCIDENT_RUN_ID='123', INCIDENT_RUN_ATTEMPT='1', INCIDENT_BUILD_RUN_ID='123')
-            with patch.dict(os.environ, env), patch.object(incident, 'api', return_value=self.run), patch.object(incident, 'pages', side_effect=[[self.job], [{'name': 'Validate app', 'conclusion': 'success'}]]), patch.object(incident, 'report', side_effect=RuntimeError('API unavailable')), patch('builtins.print'):
+            with patch.dict(os.environ, env), patch.object(incident, 'api', side_effect=[self.run, {'id': 1, 'path': '.github/workflows/CI.yml'}, self.run]), patch.object(incident, 'pages', side_effect=[[self.job], [{'name': 'Validate app', 'conclusion': 'success'}]]), patch.object(incident, 'report', side_effect=RuntimeError('API unavailable')), patch('builtins.print'):
                 with self.assertRaises(RuntimeError):
                     incident.main()
                 self.assertIn(incident.STATUS, summary.read_text())
