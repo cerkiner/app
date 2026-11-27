@@ -22,7 +22,7 @@ test('repair messages stay concise and place source paths, prompts and identifie
   const body = renderMessage({ stage: 'repair_pushed', task, result, next: 'CI and independent review.', commit: task.record.output_sha });
   const [visible, technical] = body.split('<details>');
   assert.ok(visible.length < 650);
-  assert.match(visible, /build ✓ · unit tests ✓ · browser tests not run — Chromium could not launch/);
+  assert.match(visible, /build ✓ · unit tests ✓ · browser tests not run - Chromium could not launch/);
   assert.match(visible, /\[View run\]/); assert.match(visible, /\[View commit\]/);
   const labelsOnly = visible.replace(/\]\([^)]*\)/g, ']');
   assert.ok(!labelsOnly.includes(task.head_sha) && !labelsOnly.includes('src/pricing.ts') && !labelsOnly.includes('.github/prompts/'));
@@ -31,9 +31,9 @@ test('repair messages stay concise and place source paths, prompts and identifie
 });
 test('failed or unrun checks carry short visible reasons and full details remain available', () => {
   const summary = checkSummary([{ command: 'npm run test:ci', status: 'failed', details: 'Expected total 80, received 64. Full trace follows.\nMore details.' }]);
-  assert.match(summary, /unit tests ✗ — Expected total 80, received 64\./);
+  assert.match(summary, /unit tests ✗ - Expected total 80, received 64\./);
   assert.ok(!summary.includes('Full trace'));
-  assert.equal(checkSummary([], { review: true }), 'static review only · tests not run');
+  assert.equal(checkSummary([], { review: true }), 'read-only review · no checks run');
 });
 test('incomplete reviews can never select the clean heading', () => {
   assert.equal(reviewStage({ review_status: 'incomplete' }, []), 'review_incomplete');
@@ -65,8 +65,8 @@ test('compound browser commands are shown and checks keep a stable build-unit-br
     'build ✓ · unit tests ✓ · browser tests ✓');
 });
 test('failed combined checks and setup errors are never hidden by install filtering', () => {
-  assert.match(checkSummary([{ command: 'npx playwright install chromium && npm run e2e', status: 'failed', details: 'Chromium launch failed.' }]), /browser tests ✗ — Chromium launch failed/);
-  assert.match(checkSummary([{ command: 'npm ci', status: 'failed', details: 'Registry is unavailable.' }]), /setup ✗ — Registry is unavailable/);
+  assert.match(checkSummary([{ command: 'npx playwright install chromium && npm run e2e', status: 'failed', details: 'Chromium launch failed.' }]), /browser tests ✗ - Chromium launch failed/);
+  assert.match(checkSummary([{ command: 'npm ci', status: 'failed', details: 'Registry is unavailable.' }]), /setup ✗ - Registry is unavailable/);
 });
 test('product URLs remain readable while technical repository paths move to details', () => {
   const body = renderMessage({ stage: 'issue_findings', task, summary: 'Preserve https://example.com/src/Report?token=AbC while checking src/app/file.ts.', next: 'Review findings.' });

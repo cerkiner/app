@@ -1,0 +1,180 @@
+name: PR review and repair
+run-name: ${{ github.event.workflow_run.conclusion == 'success' && 'PR review' || github.event.workflow_run.conclusion == 'failure' && 'CI repair' || 'PR follow-up' }} · ${{ github.event.workflow_run.display_title || inputs.target }}
+
+on:
+  workflow_run:
+    workflows: [PR checks]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Recover an independent review or a CI repair
+        required: true
+        type: choice
+        options: [review, repair]
+      target:
+        description: PR number for review, failed PR checks run ID for CI repair
+        required: true
+        type: string
+      expected_sha:
+        description: Optional exact PR head
+        type: string
+      source_run:
+        description: Optional source PR checks run ID
+        type: string
+      repair_source:
+        description: Internal repair source
+        default: ci
+        type: string
+      review_id:
+        description: Published review ID when recovering its repair
+        type: string
+      new_cycle:
+        description: Maintainer explicitly requests a new repair budget
+        type: boolean
+        default: false
+      cycle_request:
+        description: Internal original budget-reset run ID
+        type: string
+      refresh_hops:
+        description: Internal queued-login recovery count
+        default: '0'
+        type: string
+
+permissions: {}
+
+jobs:
+  task:
+    name: ${{ github.event.workflow_run.conclusion == 'success' && 'Review and fix PR' || 'Investigate and fix PR checks' }}
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    concurrency:
+      group: codex-login
+      queue: max
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      CODEX_MODE: ${{ inputs.mode || 'auto' }}
+      CODEX_EXPECTED_SHA: ${{ inputs.expected_sha || '' }}
+      CODEX_REPAIR_SOURCE: ${{ inputs.repair_source || 'ci' }}
+      CODEX_REVIEW_ID: ${{ inputs.review_id || '' }}
+      CODEX_NEW_CYCLE: ${{ inputs.new_cycle || false }}
+      CODEX_CYCLE_REQUEST: ${{ inputs.cycle_request || '' }}
+      TASK_SOURCE_RUN: ${{ inputs.source_run || '' }}
+      CODEX_TARGET: ${{ inputs.target || github.event.workflow_run.id }}
+      CODEX_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CODEX_AUTOMATION_ENABLED: ${{ vars.CODEX_AUTOMATION_ENABLED }}
+      CODEX_REFRESH_HOPS: ${{ inputs.refresh_hops || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Collect current evidence and check eligibility
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs prepare
+      - name: Restore fresh subscription login
+        id: auth
+        if: steps.prepare.outputs.proceed == 'true' || steps.prepare.outputs.repair_pending == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}
+          CODEX_DISPATCH_TOKEN: ${{ github.token }}
+          CODEX_CHATGPT_AUTH_JSON: ${{ secrets.CODEX_CHATGPT_AUTH_JSON }}
+        run: node .github/scripts/tasks/auth.mjs restore
+      - name: Reserve the task
+        if: steps.auth.outputs.ready == 'true' && steps.prepare.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs reserve
+      - name: Recheck the revision
+        id: current
+        if: steps.auth.outputs.ready == 'true' && steps.prepare.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs recheck
+      - name: Install the selected CLI
+        if: steps.auth.outputs.ready == 'true'
+        run: node .github/scripts/tasks/install-cli.mjs
+      - name: Execute the task in its native sandbox
+        id: execute
+        if: steps.auth.outputs.ready == 'true' && steps.prepare.outputs.proceed == 'true' && steps.current.outputs.current == 'true'
+        env:
+          CODEX_MODEL: ${{ vars.CODEX_MODEL }}
+        run: node .github/scripts/tasks/execution.mjs
+      - name: Persist the actual login even after failure
+        id: persist
+        if: always() && steps.auth.outputs.restored == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}
+        run: node .github/scripts/tasks/auth.mjs persist
+      - name: Publish findings or proposed changes
+        id: publish
+        if: always() && steps.execute.outcome == 'success' && steps.persist.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs publish
+      - name: Prepare a fresh repair of the published review
+        id: repair
+        if: steps.auth.outputs.ready == 'true' && steps.persist.outcome == 'success' && (steps.publish.outputs.repair_pending == 'true' || steps.prepare.outputs.repair_pending == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs prepare-repair
+      - name: Reserve the review repair
+        if: steps.repair.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs reserve
+      - name: Recheck the PR revision before repair
+        id: current_repair
+        if: steps.repair.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs recheck
+      - name: Verify and fix the review findings
+        id: execute_repair
+        if: steps.repair.outputs.proceed == 'true' && steps.current_repair.outputs.current == 'true'
+        env:
+          CODEX_MODEL: ${{ vars.CODEX_MODEL }}
+        run: node .github/scripts/tasks/execution.mjs
+      - name: Save the actual login after repair or failure
+        id: persist_repair
+        if: always() && steps.auth.outputs.restored == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}
+        run: node .github/scripts/tasks/auth.mjs persist
+      - name: Publish verified review fixes
+        id: publish_repair
+        if: always() && steps.execute_repair.outcome == 'success' && steps.persist_repair.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs publish
+      - name: Remove login and temporary sessions
+        if: always()
+        run: node .github/scripts/tasks/auth.mjs cleanup
+      - name: Report an incomplete task
+        if: failure() && steps.auth.outputs.restored == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .github/scripts/tasks/tasks.mjs report-failure
+      - name: Summarize this run
+        if: always()
+        run: node .github/scripts/tasks/tasks.mjs summary
+      - name: Retain sanitized results
+        if: always() && (steps.prepare.outputs.proceed == 'true' || steps.prepare.outputs.repair_pending == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: task-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/repository-tasks/artifacts/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,17 +1,17 @@
 import { bounded, publicText, redactor } from './lib.mjs';
 
 export const HEADINGS = Object.freeze({
-  issue_investigating: '🔎 Codex Issue Agent — Investigating',
-  issue_pr: '🛠️ Codex Issue Agent — Pull request prepared',
-  issue_findings: '💬 Codex Issue Agent — Findings reported',
-  review_clean: '👀 Codex Review Agent — No significant issues found',
-  review_changes: '👀 Codex Review Agent — Changes needed',
-  review_incomplete: '👀 Codex Review Agent — Review incomplete',
-  repair_ci: '🔧 Codex Repair Agent — Investigating CI failure',
-  repair_review: '🔧 Codex Repair Agent — Investigating review findings',
-  repair_pushed: '🔧 Codex Repair Agent — Fix pushed',
-  repair_human: '🛑 Codex Repair Agent — Human input needed',
-  repair_limit: '🛑 Codex Repair Agent — Retry limit reached',
+  issue_investigating: '🔎 Issue work - Investigating',
+  issue_pr: '🛠️ Issue work - Pull request prepared',
+  issue_findings: '💬 Issue work - Findings reported',
+  review_clean: '👀 PR review - No significant issues found',
+  review_changes: '👀 PR review - Changes needed',
+  review_incomplete: '👀 PR review - Review incomplete',
+  repair_ci: '🔧 PR repair - Investigating CI failure',
+  repair_review: '🔧 PR repair - Investigating review findings',
+  repair_pushed: '🔧 PR repair - Fix pushed',
+  repair_human: '🛑 PR repair - Human input needed',
+  repair_limit: '🛑 PR repair - Retry limit reached',
 });
 const html = value => redactor()(publicText(value)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 function text(value, length = 240) {
@@ -30,7 +30,7 @@ function groups(test) {
 }
 export function checkSummary(tests = [], { review = false, pending = false } = {}) {
   if (pending) return 'not run yet';
-  if (review) return 'static review only · tests not run';
+  if (review && !tests.length) return 'read-only review · no checks run';
   const buckets = new Map();
   for (const test of tests) for (const key of groups(test)) {
     if (key === 'setup' && test.status === 'passed') continue;
@@ -41,7 +41,7 @@ export function checkSummary(tests = [], { review = false, pending = false } = {
   return ['setup', 'build', 'unit tests', 'browser tests', 'validation'].filter(name => buckets.has(name)).map(name => {
     const test = buckets.get(name);
     return name + (test.status === 'passed' ? ' ✓' : test.status === 'failed' ? ' ✗' : ' not run') +
-      (test.status !== 'passed' && test.details ? ' — ' + text(test.details.split(/\n|(?<=[.!?])\s/)[0], 85) : '');
+      (test.status !== 'passed' && test.details ? ' - ' + text(test.details.split(/\n|(?<=[.!?])\s/)[0], 85) : '');
   }).join(' · ');
 }
 function details(task, result, extra) {
@@ -50,20 +50,21 @@ function details(task, result, extra) {
   if (task.head_sha) lines.push('Reviewed/input commit: ' + task.head_sha);
   if (task.record?.output_sha) lines.push('Published commit: ' + task.record.output_sha);
   if (task.mode) lines.push('Prompt: .github/prompts/' + task.mode + '.md');
-  lines.push('Workflow: Codex trusted worker');
+  lines.push('Workflow: ' + (task.mode === 'issue' ? 'Issue tasks' : task.mode === 'deployment' ? 'Deployment investigation' : 'PR review and repair'));
   if (task.ci_run_id) lines.push('CI run: ' + task.ci_run_id + ', attempt ' + task.ci_run_attempt);
   if (task.review_id) lines.push('Source review: ' + task.review_id);
   if (result?.summary) lines.push('Full summary: ' + result.summary);
   if (result?.investigated?.length) lines.push('Investigation:\n' + result.investigated.map(v => '- ' + v).join('\n'));
-  if (result?.tests?.length) lines.push('Checks:\n' + result.tests.map(v => '- ' + v.status + ': ' + v.command + ' — ' + v.details).join('\n'));
+  if (result?.tests?.length) lines.push('Checks:\n' + result.tests.map(v => '- ' + v.status + ': ' + v.command + ' - ' + v.details).join('\n'));
   if (result?.unresolved?.length) lines.push('Unresolved:\n' + result.unresolved.map(v => '- ' + v).join('\n'));
-  if (result?.finding_verifications?.length) lines.push('Finding verification:\n' + result.finding_verifications.map(v => '- ' + v.finding_key + ': ' + v.status + ' — ' + v.explanation).join('\n'));
+  if (result?.finding_verifications?.length) lines.push('Finding verification:\n' + result.finding_verifications.map(v => '- ' + v.finding_key + ': ' + v.status + ' - ' + v.explanation).join('\n'));
   if (extra) lines.push(extra);
   return '<details>\n<summary>Technical details</summary>\n\n' + bounded(html(lines.join('\n\n')), 10000) + '\n\n</details>';
 }
 export function renderMessage({ stage, task = {}, result, summary, next, commit, pr, extra = '', pending = false }) {
   let heading = HEADINGS[stage];
-  if (!heading) throw new Error('Unknown agent message stage');
+  if (task.mode === 'deployment') heading = heading?.replace('Issue work', 'Deployment investigation');
+  if (!heading) throw new Error('Unknown task message stage');
   if (['repair_ci', 'repair_review', 'repair_pushed'].includes(stage)) heading += ' · Attempt ' + (task.record?.attempt || task.budget?.attempt || 1) + '/3';
   const links = [];
   if (task.repo && task.run_id) links.push('[View run](https://github.com/' + task.repo + '/actions/runs/' + task.run_id + ')');

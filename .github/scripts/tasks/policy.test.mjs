@@ -1,11 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toolDefinitions, toolArgv, handle } from './sandbox-mcp.mjs';
-import { cliArgs, containerArgs, parseResult } from './run-codex.mjs';
+import { cliArgs, settings, parseResult } from './execution.mjs';
 import { validateAuth } from './auth.mjs';
 import { BOT, records, marker, validateChanges, sha, branch, repository, redactor, redactValue, cleanEnvironment, validateResult } from './lib.mjs';
 import { repairBudget, humanRevisionAuthor, credentialsAreFresh, changedLines, findingKey } from './state.mjs';
-import { nextRuns } from './agent.mjs';
 
 const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40), d = 'd'.repeat(40);
 const botComment = record => ({ id: 1, user: { login: BOT, type: 'Bot' }, body: marker(record) });
@@ -57,55 +55,8 @@ test('only subscription credentials are accepted', () => {
   assert.throws(() => validateAuth({ ...auth, auth_mode: 'apikey', OPENAI_API_KEY: 'secret' }));
   assert.throws(() => validateAuth({ ...auth, tokens: { access_token: 'a'.repeat(20) } }));
 });
-test('review tools cannot execute shell code or read paths outside the repository', () => {
-  assert.deepEqual(toolDefinitions(true).map(t => t.name), ['list_files', 'read_file', 'search']);
-  assert.throws(() => toolArgv('workspace', { command: 'cat /auth.json' }, true));
-  assert.throws(() => toolArgv('read_file', { path: '../auth.json' }, true));
-  assert.throws(() => toolArgv('read_file', { path: '/proc/1/environ' }, true));
-  const argv = toolArgv('read_file', { path: 'x;cat /auth.json', start_line: 1 }, true);
-  assert.equal(argv[0], 'python3');
-  assert.equal(argv.at(-2), 'x;cat /auth.json'); // argv data, never host shell syntax
-  let called = false;
-  const result = handle({ id: 1, method: 'resources/read', params: { uri: 'file:///auth.json' } }, true, () => { called = true; });
-  assert.equal(called, false);
-  assert.equal(result.error.code, -32601);
-});
-test('review workspace aliases normalize inside Docker and cannot escape the repository', () => {
-  const relative = toolArgv('read_file', { path: 'src/file.ts' }, true);
-  assert.deepEqual(toolArgv('read_file', { path: '/workspace/src/file.ts' }, true), relative);
-  for (const file of ['/workspace/../auth.json', '/workspace/src/../../auth.json', '/etc/passwd', '/proc/1/environ']) {
-    assert.throws(() => toolArgv('read_file', { path: file }, true));
-  }
-});
-test('implementation commands stay inside Docker argv and credentials are never mounted', () => {
-  const argv = toolArgv('workspace', { command: 'echo x; cat /proc/1/environ' }, false);
-  assert.equal(argv[0], 'timeout');
-  assert.equal(argv.at(-1), 'echo x; cat /proc/1/environ');
-  const args = containerArgs('codex-1', '/tmp/work/workspace', false).join(' ');
-  assert.ok(args.includes('--cap-drop=ALL'));
-  assert.ok(args.includes('--security-opt=no-new-privileges'));
-  assert.ok(args.includes('/tmp:rw,exec,nosuid,nodev,size=1g')); // downloaded browser binaries must execute
-  assert.ok(!args.includes('credentials') && !args.includes('docker.sock') && !args.includes('--privileged'));
-  const review = containerArgs('codex-1', '/tmp/work/workspace', true).join(' ');
-  assert.ok(review.includes('--network none'));
-  assert.ok(review.includes('target=/workspace,readonly'));
-});
-test('Codex controller has no native shell, image, hooks, plugins or child agents', () => {
-  const args = cliArgs('/tmp/controller', 'codex-1', 'review');
-  for (const setting of ['features.shell_tool=false', 'features.view_image=false', 'features.hooks=false', 'features.multi_agent=false', 'features.plugins=false', 'forced_login_method="chatgpt"']) assert.ok(args.includes(setting), setting);
-  assert.ok(args.includes('default_permissions="controller"'));
-  assert.ok(args.includes('features.code_mode={"enabled"=false,"direct_only_tool_namespaces"=["mcp__workspace"]}'));
-  assert.ok(args.includes('features.code_mode_host=false'));
-  for (const name of ['workspace', 'list_files', 'read_file', 'search']) assert.ok(args.includes(`mcp_servers.workspace.tools.${name}.approval_mode="approve"`));
-  assert.ok(args.some(a => a.startsWith('permissions=') && a.includes('credentials"="deny"') && a.includes('"/proc"="deny"')));
-  assert.ok(args.includes('--ignore-user-config') && args.includes('--ignore-rules') && args.includes('--ephemeral'));
-  process.env.CODEX_AUTH_JSON_B64 = 'fake-test-secret'; process.env.GH_TOKEN = 'fake-test-token';
-  const env = cleanEnvironment();
-  assert.equal(env.GH_TOKEN, undefined); assert.equal(env.CODEX_AUTH_JSON_B64, undefined);
-  delete process.env.CODEX_AUTH_JSON_B64; delete process.env.GH_TOKEN;
-});
 test('automation, credential, test-config, traversal, symlink and submodule edits are rejected', () => {
-  for (const file of ['.github/workflows/CI.yml', 'nested/.codex/config.toml', 'AGENTS.md', 'src/AGENTS.md', '.gitignore', '../source.ts', 'src/../../key', '.env.local', 'auth.json', 'private.key', 'angular.json', 'src/karma.conf.js']) {
+  for (const file of ['.github/workflows/pr-checks.yml', 'nested/.codex/config.toml', 'AGENTS.md', 'src/AGENTS.md', '.gitignore', '../source.ts', 'src/../../key', '.env.local', 'auth.json', 'private.key', 'angular.json', 'src/karma.conf.js']) {
     assert.throws(() => validateChanges([{ file, mode: '100644' }]), file);
   }
   assert.throws(() => validateChanges([{ file: 'src/link', mode: '120000' }]));
@@ -116,7 +67,7 @@ test('invalid identifiers never reach Git or API path construction', () => {
   assert.throws(() => sha('HEAD; rm -rf x'));
   for (const ref of ['--upload-pack=x', 'a..b', 'a b', 'a.lock', 'foo/@{bar', '/master']) assert.throws(() => branch(ref));
   assert.throws(() => repository('owner/repo/../../other'));
-  assert.equal(branch('codex/issue-123'), 'codex/issue-123');
+  assert.equal(branch('issue-123'), 'issue-123');
 });
 test('redaction removes seed and rotated tokens, common token formats and bearer headers', () => {
   const redact = redactor(['old-oauth-access-token', 'rotated-oauth-refresh-token']);
@@ -153,21 +104,22 @@ test('malformed or mode-conflicting model results fail closed', () => {
   assert.throws(() => validateResult({ ...result, tests: [{ command: 'x', status: 'green', details: '' }] }, 'issue'));
   assert.throws(() => validateResult({ ...result, findings: [{ priority: 'P1', actionable: false, previous_key: null, title: 'x', body: 'x', path: '../auth.json', line: 2 }] }, 'issue'));
 });
-test('CI is explicitly dispatched for older feature branches without new workflow inputs', () => {
-  const calls = [], reviews = [];
-  nextRuns({ repo: 'owner/repo', branch: 'feature' }, 2, a, (endpoint, request) => {
-    calls.push({ endpoint, request });
-    if (calls.length === 1) throw Object.assign(new Error('unsupported inputs'), { httpStatus: 422 });
-  }, (...args) => reviews.push(args));
-  assert.equal(calls.length, 2);
-  assert.equal(calls[0].request.body.inputs.expected_sha, a);
-  assert.deepEqual(calls[1].request.body, { ref: 'feature' });
-  assert.deepEqual(reviews[0], ['owner/repo', 'review', 2, a]);
-});
-test('uncertain network or permission failures never blindly duplicate CI dispatches', () => {
-  let calls = 0;
-  assert.throws(() => nextRuns({ repo: 'owner/repo', branch: 'feature' }, 2, a, () => {
-    calls++; throw Object.assign(new Error('access denied'), { httpStatus: 403 });
-  }));
-  assert.equal(calls, 1);
+
+test('native task profiles protect credentials and keep review read-only with command networking off', () => {
+  for (const mode of ['issue', 'repair', 'review', 'deployment']) {
+    const cfg = settings('/tmp/project', mode, { credentials: '/tmp/login', scratch: '/tmp/scratch' });
+    assert.equal(cfg.permissions.task.filesystem['/tmp/login'], 'deny');
+    assert.equal(cfg.permissions.task.filesystem['/proc'], 'deny');
+    assert.equal(cfg.permissions.task.filesystem['/tmp/project'], mode === 'review' ? 'read' : 'write');
+    assert.equal(cfg.permissions.task.network.enabled, mode !== 'review');
+    assert.equal(cfg.approval_policy, 'never');
+    assert.equal(cfg.features.network_proxy, true);
+    assert.deepEqual(cfg.mcp_servers, {});
+    assert.equal(cfg.features.shell_tool, undefined);
+    assert.ok(!('sandbox_mode' in cfg));
+  }
+  const args = cliArgs('/tmp/project', 'review');
+  for (const flag of ['--strict-config', '--ignore-user-config', '--ignore-rules', '--ephemeral']) assert.ok(args.includes(flag));
+  assert.equal(cleanEnvironment().GH_TOKEN, undefined);
+  assert.equal(cleanEnvironment().CODEX_CHATGPT_AUTH_JSON, undefined);
 });

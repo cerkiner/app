@@ -1,3 +1,4 @@
+import { documentationPath } from './validation.mjs';
 import { BOT, MAX_ATTEMPTS, sha256 } from './lib.mjs';
 
 // Count reservations, including crashes and failed executions. A bot commit is
@@ -76,5 +77,5 @@ export function validateRepairVerification(result, findings = []) {
   const fixed = result.finding_verifications.filter(v => v.status === 'verified_fixed');
   if (fixed.length && result.outcome !== 'changes') throw new Error('A verified fix must include changes');
   if (findings.length && result.outcome === 'changes' && !fixed.length) throw new Error('No verified finding justifies the proposed repair');
-  if (fixed.length && !result.tests.some(t => t.status === 'passed' && /regression/i.test(t.command + ' ' + t.details))) throw new Error('Review repairs require a passing regression check');
+  if (fixed.some(v => !documentationPath(findings.find(f => f.key === v.finding_key)?.path)) && !result.tests.some(t => t.status === 'passed' && /regression/i.test(t.command + ' ' + t.details))) throw new Error('Review repairs require a passing regression check');
 }

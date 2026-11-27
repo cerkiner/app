@@ -16,7 +16,8 @@ class IncidentTests(unittest.TestCase):
                         head_sha='a' * 40, repository={'full_name': 'owner/app'},
                         head_repository={'full_name': 'owner/app'})
         self.job = dict(name='deploy / Production deployment', conclusion='failure',
-                        html_url='https://github.com/owner/app/actions/runs/123/job/456')
+                        html_url='https://github.com/owner/app/actions/runs/123/job/456',
+                        steps=[dict(name='Check connection or publish retained build', conclusion='failure')])
 
     def test_merged_release_failure_needs_no_open_pull_request(self):
         self.assertEqual(incident.publication_failures(self.run, [self.job], 'owner/app', 'master'), [self.job])
@@ -52,12 +53,20 @@ class IncidentTests(unittest.TestCase):
             self.assertEqual(incident.publication_failures(self.run | changed, [self.job], 'owner/app', 'master'), [])
 
     def test_duplicate_attempt_updates_and_reopens_existing_issue(self):
-        issues = [{'number': 9, 'state': 'closed', 'body': '<!-- deployment-incident:123 --> old'}]
+        issues = [{'number': 9, 'state': 'closed', 'user': {'login': 'github-actions[bot]', 'type': 'Bot'}, 'body': '<!-- deployment-incident:123 --> old'}]
         with patch.object(incident, 'pages', return_value=issues), patch.object(incident, 'api', return_value={'html_url': 'issue'}) as api:
             incident.report('owner/app', 'master', self.run | {'run_attempt': 2}, [self.job])
         path, method, payload = api.call_args.args
         self.assertEqual((path, method, payload['state']), ('repos/owner/app/issues/9', 'PATCH', 'open'))
         self.assertIn('attempts/2', payload['body'])
+
+    def test_active_parent_requires_verified_publication_attempt(self):
+        active = self.run | {'name': 'App release', 'status': 'in_progress', 'conclusion': None}
+        self.assertEqual(incident.publication_failures(active, [self.job], 'owner/app', 'master'), [])
+        self.assertEqual(incident.publication_failures(active, [self.job], 'owner/app', 'master', True), [self.job])
+        skipped = self.job | {'steps': [{'name': 'Check connection or publish retained build', 'conclusion': 'skipped'}]}
+        self.assertEqual(incident.publication_failures(active, [skipped], 'owner/app', 'master', True), [])
+        self.assertEqual(incident.publication_failures(self.run, [self.job | {'steps': []}], 'owner/app', 'master'), [])
 
     def test_issue_lookup_is_paginated(self):
         with patch.object(incident, 'api', side_effect=[[{'number': n} for n in range(100)], [{'number': 101}]]) as api:
@@ -69,8 +78,8 @@ class IncidentTests(unittest.TestCase):
             event = Path(directory) / 'event.json'
             event.write_text(json.dumps({'action': 'completed', 'repository': {'full_name': 'owner/app', 'default_branch': 'master'}, 'workflow_run': {'id': 123}}))
             summary = Path(directory) / 'summary'
-            env = dict(GITHUB_EVENT_NAME='workflow_run', GITHUB_EVENT_PATH=str(event), GITHUB_STEP_SUMMARY=str(summary), GITHUB_REPOSITORY='owner/app')
-            with patch.dict(os.environ, env), patch.object(incident, 'api', return_value=self.run), patch.object(incident, 'pages', return_value=[self.job]), patch.object(incident, 'report', side_effect=RuntimeError('API unavailable')), patch('builtins.print'):
+            env = dict(GITHUB_EVENT_NAME='workflow_run', GITHUB_EVENT_PATH=str(event), GITHUB_STEP_SUMMARY=str(summary), GITHUB_REPOSITORY='owner/app', INCIDENT_RUN_ID='123', INCIDENT_RUN_ATTEMPT='1', INCIDENT_BUILD_RUN_ID='123')
+            with patch.dict(os.environ, env), patch.object(incident, 'api', return_value=self.run), patch.object(incident, 'pages', side_effect=[[self.job], [{'name': 'Validate app', 'conclusion': 'success'}]]), patch.object(incident, 'report', side_effect=RuntimeError('API unavailable')), patch('builtins.print'):
                 with self.assertRaises(RuntimeError):
                     incident.main()
                 self.assertIn(incident.STATUS, summary.read_text())

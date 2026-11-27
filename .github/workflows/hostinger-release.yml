@@ -13,9 +13,7 @@ on:
         type: boolean
         default: false
 
-permissions:
-  contents: read
-  actions: read
+permissions: {}
 
 jobs:
   publish:
@@ -23,11 +21,17 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      attempted: ${{ steps.publication.outcome != 'skipped' && steps.publication.outcome != '' }}
+    permissions:
+      contents: read
+      actions: read
     environment:
       name: production
       url: https://sam.erkiner.com/app/
     concurrency:
       group: hostinger-production
+      queue: max
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,6 +45,7 @@ jobs:
           RELEASE_AUTOMATIC: ${{ inputs.automatic }}
         run: python3 .github/scripts/deploy/release.py
       - name: Check connection or publish retained build
+        id: publication
         if: steps.release.outputs.skip != 'true'
         env:
           HOSTINGER_FTP_HOST: ${{ secrets.HOSTINGER_FTP_HOST }}
@@ -57,15 +62,34 @@ jobs:
           RELEASE_STATUS: ${{ job.status }}
           RELEASE_SKIP: ${{ steps.release.outputs.skip }}
           RELEASE_CHECK_ONLY: ${{ inputs.check_only }}
+          RELEASE_ATTEMPTED: ${{ steps.publication.outcome != 'skipped' && steps.publication.outcome != '' }}
         run: |
           python3 - <<'PYTHON'
           import os
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('Hostinger production\n\n')
-              if os.environ['RELEASE_STATUS'] == 'failure' and os.environ['RELEASE_CHECK_ONLY'] != 'true':
+              if os.environ['RELEASE_STATUS'] == 'failure' and os.environ['RELEASE_CHECK_ONLY'] != 'true' and os.environ['RELEASE_ATTEMPTED'] == 'true':
                   summary.write('**Deployment failed; latest changes are not confirmed live.**\n\n')
                   print('::error::Deployment failed; latest changes are not confirmed live. See the deployment incident for recovery steps.')
               for key in ('RELEASE_SHA', 'RELEASE_STATUS', 'RELEASE_SKIP', 'RELEASE_CHECK_ONLY'):
                   summary.write(f"- {key}: {os.environ[key]}\n")
               summary.write('- URL: https://sam.erkiner.com/app/\n')
           PYTHON
+
+  investigate:
+    name: Investigate failed publication
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'failure' && needs.publish.outputs.attempted == 'true' && !inputs.check_only }}
+    permissions:
+      contents: write
+      actions: write
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/deployment-investigation.yml
+    with:
+      target: ${{ github.run_id }}
+      source_attempt: ${{ github.run_attempt }}
+      source_build: ${{ inputs.run_id }}
+    secrets:
+      CODEX_CHATGPT_AUTH_JSON: ${{ secrets.CODEX_CHATGPT_AUTH_JSON }}
+      CODEX_GITHUB_AUTH_PAT: ${{ secrets.CODEX_GITHUB_AUTH_PAT }}

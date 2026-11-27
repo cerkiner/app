@@ -38,8 +38,8 @@ export function requestReviewRepair(task, review, record, queue, api) {
   if (!findings.length || record.repair_requested) return false;
   queue(task.repo, 'repair', task.number, task.head_sha, 0, false, '',
     { source: 'review', review_id: integer(review.id), findings });
-  // A duplicate dispatch after an uncertain failure remains harmless: the
-  // serialized worker durably deduplicates request keys before reserving.
+  // The same workflow prepares a fresh session. Durable request keys prevent
+  // duplicate repairs after interrupted publication or a retried review.
   const updated = { ...record, repair_requested: true };
   const body = review.body.replace(/<!-- codex-agent:v1 (\{[^\n]*\}) -->/, () => marker(updated));
   api('repos/' + task.repo + '/pulls/' + task.number + '/reviews/' + integer(review.id), { method: 'PUT', body: { body } });

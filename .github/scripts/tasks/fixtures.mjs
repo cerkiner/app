@@ -6,10 +6,11 @@ import { marker, BOT } from './lib.mjs';
 const a = 'a'.repeat(40);
 const scripts = import.meta.dirname;
 export function fixture(t, responses = {}) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'codex-agent-test-'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'repository-task-test-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const bin = path.join(dir, 'bin'), work = path.join(dir, 'work');
   mkdirSync(bin); mkdirSync(work);
+  responses = { 'repos/owner/repo/pulls?state=all&head=owner%3Acodex%2Fissue-1&per_page=100': [], ...responses };
   writeFileSync(path.join(dir, 'responses.json'), JSON.stringify(responses));
   writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'); const root = ${JSON.stringify(dir)}; const args = process.argv.slice(2);
@@ -38,9 +39,9 @@ else process.exitCode=23;
 export function repairResponses(history = [], { head = a, protectedBranch = false } = {}) {
   return {
     'repos/owner/repo': { visibility: 'private', default_branch: 'master' },
-    'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z', path: '.github/workflows/codex-agent.yml', event: 'workflow_dispatch', actor: { login: 'maintainer', type: 'User' } },
+    'repos/owner/repo/actions/runs/50': { id: 50, created_at: '2026-11-02T00:00:00Z', path: '.github/workflows/pr-follow-up.yml', event: 'workflow_dispatch', actor: { login: 'maintainer', type: 'User' } },
     'repos/owner/repo/actions/runs/123': { id: 123, run_attempt: 1, repository: { full_name: 'owner/repo' },
-      head_repository: { full_name: 'owner/repo' }, head_sha: head, name: 'CI', path: '.github/workflows/CI.yml', status: 'completed',
+      head_repository: { full_name: 'owner/repo' }, head_sha: head, name: 'PR checks', path: '.github/workflows/pr-checks.yml', status: 'completed',
       conclusion: 'failure', event: 'pull_request', pull_requests: [{ number: 1 }], html_url: 'https://github.com/owner/repo/actions/runs/123' },
     'repos/owner/repo/pulls/1': { number: 1, state: 'open', title: 'Fix', body: '', user: { login: 'maintainer', type: 'User' },
       head: { sha: head, ref: 'feature', repo: { full_name: 'owner/repo' } }, base: { sha: a, ref: 'master', repo: { full_name: 'owner/repo' } } },

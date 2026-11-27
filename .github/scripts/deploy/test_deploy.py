@@ -141,16 +141,27 @@ class SafetyTests(unittest.TestCase):
 
     def test_superseded_automatic_release_is_skipped(self):
         run = dict(workflow_id=1, event='push', head_branch='master',
-                   head_repository={'full_name': 'owner/app'}, head_sha='a' * 40)
+                   head_repository={'full_name': 'owner/app'}, head_sha='a' * 40, id=123, run_number=10)
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'output'
             env = {'RELEASE_RUN_ID': '123', 'GITHUB_RUN_ID': '123',
                    'GITHUB_REPOSITORY': 'owner/app', 'RELEASE_AUTOMATIC': 'true',
                    'GITHUB_OUTPUT': str(output)}
-            with patch.dict(os.environ, env, clear=True), patch.object(release, 'api', side_effect=[run, {'id': 1}, {'object': {'sha': 'b' * 40}}]), patch.object(release.subprocess, 'run') as download:
+            with patch.dict(os.environ, env, clear=True), patch.object(release, 'api', side_effect=[run, {'id': 1}, {'object': {'sha': 'b' * 40}}, {'workflow_runs': [run, run | {'id': 124, 'run_number': 11}]}]), patch.object(release.subprocess, 'run') as download:
                 release.main()
                 self.assertEqual(output.read_text(), 'skip=true\n')
                 download.assert_not_called()
+
+    def test_documentation_commit_does_not_supersede_latest_application_run(self):
+        run = dict(id=123, run_number=10, workflow_id=1, event='push', head_branch='master',
+                   head_repository={'full_name': 'owner/app'}, head_sha='a' * 40)
+        with patch.object(release, 'api', side_effect=[{'workflow_runs': [run]}, {'status': 'ahead'}]):
+            self.assertTrue(release.current_candidate(run, 1, 'owner/app', 'b' * 40))
+        with patch.object(release, 'api', side_effect=[{'workflow_runs': [run]}, {'status': 'diverged'}]):
+            self.assertFalse(release.current_candidate(run, 1, 'owner/app', 'b' * 40))
+        with patch.object(release, 'api', return_value={'workflow_runs': []}):
+            with self.assertRaises(ValueError):
+                release.current_candidate(run, 1, 'owner/app', 'b' * 40)
 
     def test_artifact_cannot_escape_destination(self):
         archive = io.BytesIO()

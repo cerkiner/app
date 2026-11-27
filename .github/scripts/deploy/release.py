@@ -20,6 +20,18 @@ def eligible(run, workflow_id, repo):
             and re.fullmatch(r'[0-9a-f]{40}', run['head_sha']) is not None)
 
 
+def current_candidate(run, workflow_id, repo, head):
+    runs = api(f'repos/{repo}/actions/workflows/CI.yml/runs?event=push&branch=master&per_page=100')['workflow_runs']
+    candidates = [item for item in runs if eligible(item, workflow_id, repo)]
+    if not candidates or not any(item['id'] == run['id'] for item in candidates):
+        raise ValueError('Cannot establish the current production candidate')
+    newest = max(candidates, key=lambda item: int(item['run_number']))
+    if newest['id'] != run['id']:
+        return False
+    comparison = api(f"repos/{repo}/compare/{run['head_sha']}...{head}")
+    return comparison['status'] in ('ahead', 'identical')
+
+
 def extract(archive, destination):
     with zipfile.ZipFile(archive) as bundle:
         entries = bundle.infolist()
@@ -48,7 +60,7 @@ def main():
         if run_id != os.environ['GITHUB_RUN_ID']:
             raise ValueError('Automatic release must use its own CI run')
         head = api(f'{base}/git/ref/heads/master')['object']['sha']
-        if head != run['head_sha']:
+        if not current_candidate(run, workflow['id'], repo, head):
             with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
                 output.write('skip=true\n')
             print('Skipping superseded production build')

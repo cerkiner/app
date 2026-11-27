@@ -5,13 +5,14 @@ import path from 'node:path';
 
 export const BOT = 'github-actions[bot]';
 export const MAX_ATTEMPTS = 3;
-export const CI_WORKFLOW = 'CI.yml';
-export const WORKER_WORKFLOW = 'codex-agent.yml';
-export const AUTH_SECRET = 'CODEX_AUTH_JSON_B64';
+export const CI_WORKFLOW = 'pr-checks.yml';
+export const TASK_WORKFLOW = 'pr-follow-up.yml';
+export const AUTH_SECRET = 'CODEX_CHATGPT_AUTH_JSON';
 export const ROOT = path.resolve(import.meta.dirname, '../../..');
-export const WORK = process.env.CODEX_WORK || path.join(process.env.RUNNER_TEMP || '/tmp', 'codex-agent');
+export const WORK = process.env.CODEX_WORK || path.join(process.env.RUNNER_TEMP || '/tmp', 'repository-tasks');
 export const ARTIFACTS = path.join(WORK, 'artifacts');
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
+export const authoredTitle = value => typeof value === 'string' && !/\b(?:codex|ai|agent)\b/i.test(value) ? value.replace(/\u2014/g, '-').replace(/[\r\n]/g, ' ').slice(0, 100) : 'Repository update';
 export const bounded = (value, size = 12000) => String(value ?? '').slice(0, size);
 export const json = file => JSON.parse(readFileSync(file, 'utf8'));
 export function save(file, value) {
@@ -79,13 +80,19 @@ export function publicText(value) {
   return bounded(value, 24000).replace(/<!--[\s\S]*?-->/g, '').replace(/@(?=[A-Za-z0-9_])/g, '@\u200b');
 }
 export function dispatch(repo, mode, target, expectedSha = '', hops = 0, newCycle = false, cycleRequest = '', repair = {}) {
-  if (!['issue', 'review', 'repair'].includes(mode)) throw new Error('Invalid task mode');
-  gh(`repos/${repo}/actions/workflows/${WORKER_WORKFLOW}/dispatches`, {
+  if (!['issue', 'review', 'repair', 'deployment'].includes(mode)) throw new Error('Invalid task mode');
+  const workflow = mode === 'issue' ? 'issue-tasks.yml' : mode === 'deployment' ? 'deployment-investigation.yml' : TASK_WORKFLOW;
+  const inputs = { target: String(integer(target)), refresh_hops: String(hops) };
+  if (mode === 'deployment') { inputs.source_attempt = String(integer(repair.source_attempt)); inputs.source_build = String(integer(repair.source_build)); }
+  if (mode === 'review' || mode === 'repair') Object.assign(inputs, {
+    mode, expected_sha: expectedSha ? sha(expectedSha) : '', new_cycle: String(newCycle),
+    cycle_request: cycleRequest ? String(integer(cycleRequest)) : '', repair_source: repair.source || 'ci',
+    review_id: repair.review_id ? String(integer(repair.review_id)) : '',
+    source_run: repair.source_run ? String(integer(repair.source_run)) : '',
+  });
+  gh(`repos/${repo}/actions/workflows/${workflow}/dispatches`, {
     method: 'POST', body: { ref: process.env.CODEX_DEFAULT_BRANCH || 'master', inputs: {
-      mode, target: String(integer(target)), expected_sha: expectedSha ? sha(expectedSha) : '',
-      refresh_hops: String(hops), new_cycle: String(newCycle), cycle_request: cycleRequest ? String(integer(cycleRequest)) : '',
-      ...(repair.source ? { repair_source: repair.source } : {}),
-      ...(repair.review_id ? { review_id: String(integer(repair.review_id)), review_findings: JSON.stringify(repair.findings || []) } : {}),
+      ...inputs,
     } },
   });
 }
