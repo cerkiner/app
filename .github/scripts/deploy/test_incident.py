@@ -68,6 +68,14 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual(incident.publication_failures(active, [skipped], 'owner/app', 'master', True), [])
         self.assertEqual(incident.publication_failures(self.run, [self.job | {'steps': []}], 'owner/app', 'master'), [])
 
+    def test_historical_publish_alias_requires_an_actual_automatic_publication(self):
+        job = self.job | {'name': 'deploy / publish'}
+        self.assertEqual(incident.publication_failures(self.run, [job], 'owner/app', 'master'), [job])
+        preflight = job | {'steps': [{'name': 'Resolve and download validated build', 'conclusion': 'failure'}]}
+        self.assertEqual(incident.publication_failures(self.run, [preflight], 'owner/app', 'master'), [])
+        manual = self.run | {'event': 'workflow_dispatch', 'path': '.github/workflows/deploy-hostinger.yml'}
+        self.assertEqual(incident.publication_failures(manual, [job], 'owner/app', 'master'), [])
+
     def test_issue_lookup_is_paginated(self):
         with patch.object(incident, 'api', side_effect=[[{'number': n} for n in range(100)], [{'number': 101}]]) as api:
             self.assertEqual(len(incident.pages('repos/owner/app/issues?state=all')), 101)

@@ -41,7 +41,9 @@ def publication_failures(run, jobs, repo, branch, allow_active=False):
             or run.get('head_repository', {}).get('full_name') != repo
             or not re.fullmatch(r'[0-9a-f]{40}', run.get('head_sha', ''))):
         return []
-    return [job for job in jobs if job.get('name', '').split(' / ')[-1] == 'Production deployment'
+    return [job for job in jobs if (job.get('name', '').split(' / ')[-1] == 'Production deployment'
+            or (job.get('name', '').split(' / ')[-1] == 'publish'
+                and run.get('path') == '.github/workflows/CI.yml' and run.get('event') == 'push'))
             and job.get('conclusion') in FAILURES
             and any(step.get('name') in ('Check connection or publish retained build', 'Publish retained build')
                     and step.get('conclusion') in FAILURES for step in job.get('steps', []))]
