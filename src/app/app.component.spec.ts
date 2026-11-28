@@ -44,6 +44,14 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelectorAll('ion-menu').length).toBe(2);
   });
 
+  it('should render the correct professional link titles', () => {
+    const app: HTMLElement = fixture.nativeElement;
+    const titles = Array.from(app.querySelectorAll('ion-menu[side="end"] ion-label'),
+      label => label.textContent?.trim());
+    expect(titles).toContain('LinkedIn');
+    expect(titles).toContain('GitHub');
+  });
+
   it('should initialize the app', async () => {
     expect(platform.ready).toHaveBeenCalled();
     await platformReady;
