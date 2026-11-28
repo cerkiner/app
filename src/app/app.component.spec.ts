@@ -47,9 +47,13 @@ describe('AppComponent', () => {
   it('should render the correct professional link titles', async () => {
     const app: HTMLElement = fixture.nativeElement;
     const labels = Array.from(app.querySelectorAll<HTMLIonLabelElement>('ion-menu[side="end"] ion-label'));
-    // Ionic exposes slotted text through textContent after the labels render.
     await Promise.all(labels.map(label => label.componentOnReady()));
-    const titles = labels.map(label => label.textContent?.trim());
+    // Ionic's scoped-slot runtime overrides textContent on ion-label.
+    const range = app.ownerDocument.createRange();
+    const titles = labels.map(label => {
+      range.selectNodeContents(label);
+      return range.toString().trim();
+    });
     expect(titles).toContain('LinkedIn');
     expect(titles).toContain('GitHub');
   });
