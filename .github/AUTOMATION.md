@@ -9,7 +9,7 @@ use API billing, approve PRs, merge code, or deploy from a model session.
 | --- | --- | --- |
 | Issue tasks | Issue opened, or manual recovery | Investigate and implement a focused change or report findings |
 | PR checks | New PR revision, including drafts | Validate that exact revision |
-| PR review and repair | PR checks complete | Repair failures, or independently review passing changes and fix confirmed findings |
+| PR review and repair | Explicit handoff after Validate app finishes | Repair failures, or independently review passing changes and fix confirmed findings |
 | App release | Production-relevant master push | Validate and publish the retained build |
 | Deployment investigation | Failed publication job, or manual recovery | Update the incident and investigate without redeploying |
 
@@ -19,11 +19,19 @@ inside the same follow-up run. A fix returns through normal PR checks. No source
 change means no new commit, CI request, or release. Documentation receives review
 for coherence, links, examples and consistency with the application.
 
-There is no dispatcher-to-worker chain, Docker image, command-forwarding bridge,
-automatic workflow approval, immediate review dispatch or CI-dispatch fallback.
-A superseded or canceled check may still produce a short skipped follow-up entry;
-it does not invoke a model. Conflicted PRs without completed checks can be reviewed
-through explicit manual recovery.
+The existing PR checks workflow starts the existing follow-up workflow from a
+separate job without an application checkout. The validation job keeps read-only
+permissions. Only repository branches receive this automatic handoff; fork reviews
+are started manually. There is no controller, Docker image, or automatic workflow
+approval. The handoff verifies the completed Validate app job and exact revision,
+even while the enclosing CI workflow is still finishing.
+
+In this flow, Independent review is published by the default-branch worker.
+The PR-defined handoff has Actions write permission, not status write permission.
+If dispatch fails, that job is red and the required review result remains
+unreported, so merging stays blocked. Preparation errors are reported against a
+verified PR identity saved before fetching comparison evidence. This POC trusts
+repository writers and the decision to approve their workflow changes.
 
 ## PR-page approval and results
 
@@ -32,9 +40,19 @@ or updated PR. Select **Approve workflows to run** on that PR to start CI. This
 only authorizes workflow execution. Code review and merging remain separate
 maintainer decisions. A later fix commit can require the button again.
 
-Check results, COMMENT reviews, actionable findings, fix commits and remaining
-blockers stay on the PR. There are no approval commands or approval services.
-Existing repository protections and approval settings are unchanged.
+Issue and recovery PRs open without draft status. After validation, **Independent review** appears on
+the PR: pending during review or repair, success after a complete review with no
+unresolved material findings, and failure/error when work is incomplete or blocked.
+Its link opens the relevant run. An incomplete review also fails its workflow job.
+Repair commits need fresh checks and review; an old green result never covers a
+new revision. Confirmed incorrect or already resolved findings can be cleared;
+blocked or unreproduced findings remain blocking.
+
+After verifying the new status live, add Independent review beside Validate app
+in the existing master ruleset, with GitHub Actions as the source. Until that
+rollout step, GitHub only enforces the existing validation requirement. COMMENT
+reviews and repair explanations remain on the PR; automation never approves or
+merges it. No new credentials or manual control forms are needed.
 
 ## Authentication
 
@@ -90,9 +108,16 @@ and localhost tests. Review uses native read-only filesystem access and command
 networking disabled. Read-only restricts writes; it does not necessarily prevent
 commands or repository code from executing. There is no custom read/search API.
 
-Authentication, accepted Git metadata, execution configuration, workflow command
-files, process credential paths and privileged sockets are unavailable to project
-commands. Publication happens later through accepted helpers with a separate Git
+The workspace is an independent Git repository containing the selected revision
+and, for PR work, its comparison commit. The executor verifies HEAD and checks
+that Git can read the comparison diff before invoking the model. The review
+workspace also contains the ancestors of HEAD for `git log`, `git blame`, and
+`git show`. Reviewers can inspect `refs/review/base` and `HEAD` when supplied
+patch excerpts are truncated. The workspace has its own Git config and objects.
+
+Authentication, the original checkout's Git metadata, execution configuration,
+workflow command files, process credential paths and privileged sockets remain
+unavailable to project commands. Publication happens later through accepted helpers with a separate Git
 index, hooks disabled, checked paths and an atomic expected-head push. Workflow,
 instruction, credential, symlink, package-script and test-configuration changes
 require human handling. Native settings do not use managed enterprise policies,
@@ -147,8 +172,8 @@ release, incident and FTP helpers remain unchanged.
 
 ## Manual recovery
 
-Use the standard Run workflow forms on the default branch. These are recovery
-requests, not approval commands. Approve held PR checks with the PR-page button.
+Use the existing Run workflow forms for recovery. These are not approval commands.
+Approve held PR checks with the PR-page button. Fork reviews use manual recovery.
 
 - Issue tasks: supply `issue_number`.
 - PR review and repair: choose `task=review` and supply `pr_number`. Optionally
@@ -159,6 +184,8 @@ requests, not approval commands. Approve held PR checks with the PR-page button.
   the exact reviewed `expected_head_sha`.
 - PR checks: choose the PR branch as ref, supply `pr_number` and its exact
   `expected_head_sha`. This reruns validation and does not approve a pending run.
+  Use the native PR run's rerun controls for its required Validate app check;
+  dispatched diagnostic jobs are not a substitute for that native check.
 - Deployment investigation: supply `failed_release_run_id`, `release_attempt`,
   and `build_run_id`. The failed workflow and artifact revisions can differ.
   Investigation never redeploys.
@@ -183,17 +210,17 @@ checks, authenticated state, repair budgets and publication guards remain.
 The normal application build, unit suite and browser suite remain in validation.
 PR checks and App release no longer install the model CLI.
 
-During this cleanup, establish the existing test baseline before deletion, check
-module imports and workflow syntax, then use temporary synthetic data for focused
-authentication, state, revision and CLI verification. Report concrete CLI or runner
-limitations instead of loosening permissions. These development checks do not
-establish that a real subscription login or end-to-end task succeeds.
+Use disposable checks for Git preparation, incomplete review failures, stale
+revisions and status mapping, plus the existing application checks and workflow
+syntax validation. No permanent automation test harness is added. Report concrete
+CLI or runner limitations instead of loosening permissions. Local checks do not
+establish that a live subscription session or the complete workflow succeeds.
 
-After merge, wait for the shared login queue to drain, then open a controlled
-README-only issue. Verify a real task, credential persistence, PR-page approval
-when required, CI, independent review, fixes and duplicate suppression. Replay a
-verified historical publication failure without redeploying. Do not deploy only
-for verification. Live success proves the migrated flows, not elimination of the
+After merge, wait for the shared login queue to drain, then open a fresh small
+issue. Verify a non-draft PR, approval when required, CI, a complete independent
+review, and the two required green results. A requested application correction
+can then exercise automatic publication after the maintainer merges it; a
+documentation-only issue does not deploy. Live success does not eliminate the
 untouched tutorial's queued-secret limitation.
 
 Only `CODEX_AUTH_JSON_B64` and `GH_PAT` become obsolete after live verification.

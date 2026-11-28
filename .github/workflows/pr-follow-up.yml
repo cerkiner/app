@@ -1,10 +1,7 @@
 name: PR review and repair
-run-name: "${{ inputs.task || (github.event.workflow_run.conclusion == 'success' && 'PR review' || (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') && 'CI repair' || 'PR follow-up') }} · ${{ github.event.workflow_run.display_title || format('PR #{0}', inputs.pr_number) }}"
+run-name: "PR follow-up · #${{ inputs.pr_number }} · ${{ inputs.task }}"
 
 on:
-  workflow_run:
-    workflows: [PR checks]
-    types: [completed]
   workflow_dispatch:
     inputs:
       task:
@@ -54,10 +51,11 @@ jobs:
       issues: write
       pull-requests: write
       actions: write
+      statuses: write
     env:
       GH_REPO: ${{ github.repository }}
       TASK_PR_NUMBER: ${{ inputs.pr_number || '' }}
-      TASK_CHECKS_RUN_ID: ${{ inputs.checks_run_id || github.event.workflow_run.id }}
+      TASK_CHECKS_RUN_ID: ${{ inputs.checks_run_id || '' }}
       TASK_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha || '' }}
       TASK_REVIEW_ID: ${{ inputs.review_id || '' }}
       TASK_RESET_REPAIR_BUDGET: ${{ inputs.reset_repair_budget || false }}
@@ -75,13 +73,13 @@ jobs:
 
       - name: Failed checks - collect evidence for a focused repair
         id: prepare_ci
-        if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out' || inputs.task == 'ci-repair'
+        if: inputs.task == 'ci-repair'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/tasks/tasks.mjs prepare-ci-repair
       - name: Passing checks - collect evidence for an independent review
         id: prepare_review
-        if: github.event.workflow_run.conclusion == 'success' || inputs.task == 'review'
+        if: inputs.task == 'review'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/tasks/tasks.mjs prepare-review
@@ -213,6 +211,10 @@ jobs:
             requirements, linked issues, actual diff, relevant source, previous findings and
             CI evidence. A passing check does not establish correctness. For documentation,
             verify coherence, links, examples and claims against the current project.
+
+            Verify HEAD against the supplied revision. Patch excerpts may be truncated;
+            read the full comparison with git diff --no-ext-diff --no-textconv
+            refs/review/base HEAD. Report incomplete if relevant coverage is unavailable.
 
             Use the native read-only configuration. Do not modify files or request write or
             network access. Commands can execute within those restrictions; record checks
@@ -379,7 +381,7 @@ jobs:
         if: always()
         run: node .github/scripts/tasks/auth.mjs cleanup
       - name: Report an incomplete task
-        if: failure() && (steps.prepare_ci.outputs.proceed == 'true' || steps.prepare_review.outputs.proceed == 'true' || steps.prepare_review.outputs.actionable_findings == 'true' || steps.prepare_requested_repair.outputs.proceed == 'true')
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/tasks/tasks.mjs report-failure
