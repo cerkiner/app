@@ -44,11 +44,10 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelectorAll('ion-menu').length).toBe(2);
   });
 
-  it('should render the correct professional link titles', async () => {
+  it('should render the correct professional link titles', () => {
     const app: HTMLElement = fixture.nativeElement;
-    const labels = Array.from(app.querySelectorAll<HTMLIonLabelElement>('ion-menu[side="end"] ion-label'));
-    await Promise.all(labels.map(label => label.componentOnReady()));
-    // Ionic's scoped-slot runtime overrides textContent on ion-label.
+    const labels = Array.from(app.querySelectorAll('ion-menu[side="end"] ion-label'));
+    // A native range reads the text before and after Ionic upgrades the label.
     const range = app.ownerDocument.createRange();
     const titles = labels.map(label => {
       range.selectNodeContents(label);
