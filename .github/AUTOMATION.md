@@ -26,6 +26,13 @@ are started manually. There is no controller, Docker image, or automatic workflo
 approval. The handoff verifies the completed Validate app job and exact revision,
 even while the enclosing CI workflow is still finishing.
 
+In this flow, Independent review is published by the default-branch worker.
+The PR-defined handoff has Actions write permission, not status write permission.
+If dispatch fails, that job is red and the required review result remains
+unreported, so merging stays blocked. Preparation errors are reported against a
+verified PR identity saved before fetching comparison evidence. This POC trusts
+repository writers and the decision to approve their workflow changes.
+
 ## PR-page approval and results
 
 Publication uses the built-in GitHub token. GitHub may hold checks for a created

@@ -381,7 +381,7 @@ jobs:
         if: always()
         run: node .github/scripts/tasks/auth.mjs cleanup
       - name: Report an incomplete task
-        if: failure() && (steps.prepare_ci.outputs.proceed == 'true' || steps.prepare_review.outputs.proceed == 'true' || steps.prepare_review.outputs.actionable_findings == 'true' || steps.prepare_requested_repair.outputs.proceed == 'true')
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/tasks/tasks.mjs report-failure

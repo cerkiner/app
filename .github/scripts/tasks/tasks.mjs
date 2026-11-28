@@ -124,6 +124,14 @@ async function prepare(kind) {
     kind, mode: modes[kind], repair_source: kind === 'review-repair' ? 'review' : 'ci',
     new_cycle: process.env.TASK_RESET_REPAIR_BUDGET === 'true' };
   let issue, pr, ci, sourceReview;
+  // Retain only a verified current PR identity before fallible preparation.
+  // Its failure reporter can then publish an error without guessing a revision.
+  if (expectedSha && process.env.TASK_PR_NUMBER && ['review', 'repair'].includes(task.mode)) {
+    const current = prFor(repo, integer(process.env.TASK_PR_NUMBER));
+    if (current.state !== 'open' || current.head.sha !== sha(expectedSha) || current.base.ref !== task.default_branch || current.base.repo.full_name !== repo) return;
+    Object.assign(task, { number: current.number, head_sha: sha(expectedSha) });
+    save(taskFile, task);
+  }
   if (kind === 'issue') {
     task.target = integer(process.env.TASK_ISSUE_NUMBER);
     issue = gh(`repos/${repo}/issues/${task.target}`);

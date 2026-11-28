@@ -120,7 +120,7 @@ async function runSession(kind) {
     if (git(['rev-parse', 'HEAD']).trim() !== task.head_sha) throw new Error('Workspace revision verification failed.');
     if (comparison) {
       git(['update-ref', 'refs/review/base', comparison]);
-      git(['diff', '--no-ext-diff', '--no-textconv', 'refs/review/base', 'HEAD', '--']);
+      git(['diff', '--no-ext-diff', '--no-textconv', '--stat=120,80,1', 'refs/review/base', 'HEAD', '--']);
     }
     writeFileSync(path.join(session, 'execution.toml'), configuration(workspace, task.mode), { mode: 0o600 });
     const evidence = JSON.stringify(task.context);
