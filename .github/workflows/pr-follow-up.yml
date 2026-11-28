@@ -221,14 +221,22 @@ jobs:
             truthfully and explain unavailable evidence. Never approve or merge the PR.
 
             Identify concrete correctness, security, regression and documentation defects.
-            Use exact paths and current right-side line numbers. P0/P1 are blocking, P2 is
-            material, and P3 is advisory. Mark real defects actionable; keep style-only
-            preferences advisory. Reuse a previous finding key only for the same defect.
+            Use repository-relative file paths under 400 characters with no empty, dot or
+            dot-dot segments, ASCII control characters, or backslashes. Use positive, current
+            right-side line numbers. If a material finding cannot use a supported path,
+            describe the coverage limit in unresolved and mark the review incomplete.
+            P0/P1 are blocking, P2 is material, and P3 is advisory.
+            Mark actionable P0–P2 defects with actionable true and always set actionable false
+            for P3. Reuse a supplied 20-character lowercase hexadecimal previous_key only
+            for the same defect on the same path. Otherwise set previous_key to null.
+            Limit the title to 240 characters and the body to 2400 characters.
 
             Return outcome review and an honest complete or incomplete review_status.
-            Explain every coverage limit in unresolved. An incomplete review cannot claim
-            that the whole PR is clear. A separate fresh repair session will verify and fix
-            actionable findings. Do not resume or rely on an implementation conversation.
+            Set finding_verifications to an empty array. A separate repair session owns
+            verification records and fixes. Explain limitations in unresolved and mark the
+            review incomplete when missing evidence prevents assessing the current change.
+            An incomplete review cannot claim that the whole PR is clear. Do not resume
+            or rely on an implementation conversation.
 
             The proposed project is the current working directory. Use native tools to read,
             search, edit and run appropriate checks within the selected permissions.
