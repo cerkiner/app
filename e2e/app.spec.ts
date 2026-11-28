@@ -56,6 +56,10 @@ test('supports profile navigation and mobile menus', async ({ page, isMobile }) 
         (element as HTMLElement & { isOpen(): Promise<boolean> }).isOpen()
       )).toBe(true);
       await expect(menu.getByText(label, { exact: true })).toBeVisible();
+      if (side === 'end') {
+        await expect(menu.getByText('LinkedIn', { exact: true })).toBeVisible();
+        await expect(menu.getByText('GitHub', { exact: true })).toBeVisible();
+      }
       const viewport = page.viewportSize()!;
       // The links menu is RTL, so its physical side can differ from "end".
       const panelLeft = await menu.evaluate(element => {
