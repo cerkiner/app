@@ -109,10 +109,11 @@ networking disabled. Read-only restricts writes; it does not necessarily prevent
 commands or repository code from executing. There is no custom read/search API.
 
 The workspace is an independent Git repository containing the selected revision
-and, for PR work, its comparison commit. The executor verifies HEAD and a readable
-full diff before invoking the model. Review can inspect refs/review/base and HEAD
-even when supplied patch excerpts are truncated. Host Git config, credentials,
-hooks and object alternates are not copied.
+and, for PR work, its comparison commit. The executor verifies HEAD and checks
+that Git can read the comparison diff before invoking the model. The review
+workspace also contains the ancestors of HEAD for `git log`, `git blame`, and
+`git show`. Reviewers can inspect `refs/review/base` and `HEAD` when supplied
+patch excerpts are truncated. The workspace has its own Git config and objects.
 
 Authentication, the original checkout's Git metadata, execution configuration,
 workflow command files, process credential paths and privileged sockets remain

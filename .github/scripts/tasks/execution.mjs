@@ -114,8 +114,12 @@ async function runSession(kind) {
     git(['config', 'core.hooksPath', '/dev/null']);
     const comparison = task.context.pr?.comparison_sha;
     if (task.mode === 'review' && !comparison) throw new Error('Review comparison is unavailable; no model call was started.');
-    git(['-c', 'protocol.file.allow=always', 'fetch', '--quiet', '--no-tags', '--depth=1', '--update-shallow', ROOT,
+    const depth = task.mode === 'review' ? [] : ['--depth=1', '--update-shallow'];
+    git(['-c', 'protocol.file.allow=always', 'fetch', '--quiet', '--no-tags', ...depth, ROOT,
       ...new Set([task.head_sha, comparison].filter(Boolean))]);
+    if (task.mode === 'review' && git(['rev-parse', '--is-shallow-repository']).trim() !== 'false') {
+      throw new Error('Review history is shallow; no model call was started.');
+    }
     git(['checkout', '--quiet', '--detach', task.head_sha]);
     if (git(['rev-parse', 'HEAD']).trim() !== task.head_sha) throw new Error('Workspace revision verification failed.');
     if (comparison) {

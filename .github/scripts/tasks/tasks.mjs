@@ -301,9 +301,15 @@ async function prepare(kind) {
   }
   // Fetch only through the trusted checkout with a step-scoped job token.
   const fetchRef = pr && !sameRepository(pr, repo) ? `refs/pull/${integer(pr.number)}/head` : task.head_sha;
-  command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1', `https://github.com/${repo}.git`, fetchRef], { cwd: ROOT });
+  let depth = ['--depth=1'];
+  if (task.mode === 'review') {
+    const shallow = command('git', ['rev-parse', '--is-shallow-repository'], { cwd: ROOT }).trim() === 'true';
+    depth = shallow ? ['--unshallow'] : [];
+  }
+  command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags',
+    ...depth, `https://github.com/${repo}.git`, fetchRef], { cwd: ROOT });
   if (fetchRef !== task.head_sha && command('git', ['rev-parse', 'FETCH_HEAD'], { cwd: ROOT }).trim() !== task.head_sha) throw new Error('PR head changed during fetch; this review request is stale');
-  if (pr) command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1',
+  if (pr && task.mode !== 'review') command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1',
     `https://github.com/${repo}.git`, task.context.pr.comparison_sha], { cwd: ROOT });
   rmSync(path.join(ARTIFACTS, 'result.json'), { force: true });
   rmSync(path.join(ARTIFACTS, 'error.json'), { force: true });
