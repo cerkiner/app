@@ -232,9 +232,11 @@ jobs:
             Limit the title to 240 characters and the body to 2400 characters.
 
             Return outcome review and an honest complete or incomplete review_status.
-            Explain every coverage limit in unresolved. An incomplete review cannot claim
-            that the whole PR is clear. A separate fresh repair session will verify and fix
-            actionable findings. Do not resume or rely on an implementation conversation.
+            Set finding_verifications to an empty array. A separate repair session owns
+            verification records and fixes. Explain limitations in unresolved and mark the
+            review incomplete when missing evidence prevents assessing the current change.
+            An incomplete review cannot claim that the whole PR is clear. Do not resume
+            or rely on an implementation conversation.
 
             The proposed project is the current working directory. Use native tools to read,
             search, edit and run appropriate checks within the selected permissions.
