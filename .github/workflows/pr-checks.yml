@@ -25,46 +25,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify_issue_link:
-    name: Verify native issue link permissions
-    if: github.event.pull_request.number == 70 && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: '24'
-      - name: Verify and restore the test link for the closed issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict';
-          import { gh } from './.github/scripts/tasks/lib.mjs';
-          import { syncClosingIssue } from './.github/scripts/tasks/tasks.mjs';
-          const repo = process.env.GH_REPO;
-          const issue = gh(`repos/${repo}/issues/67`);
-          const pr = gh(`repos/${repo}/pulls/70`);
-          assert.equal(issue.state, 'closed');
-          const originalLink = await syncClosingIssue(pr, issue, pr.head.sha, false);
-          assert.equal(originalLink, false);
-          try {
-            assert.equal(await syncClosingIssue(pr, issue, pr.head.sha, true), false);
-            console.log('GitHub accepted and exposed the closing link.');
-          } finally {
-            await syncClosingIssue(pr, issue, pr.head.sha, false);
-          }
-          assert.equal(gh(`repos/${repo}/issues/67`).state, 'closed');
-          console.log('The closing link was removed and issue #67 remained closed.');
-          JS
   validate:
     name: Validate app
     runs-on: ubuntu-latest
