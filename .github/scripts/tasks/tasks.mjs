@@ -1,15 +1,14 @@
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
-import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, WORKER_WORKFLOW, gh, pages, command, json, save,
-  output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment, dispatch,
-  publicText, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
-import { trustedWorkflowTree, startPublishedWorkflows } from './checks.mjs';
-import { repairBudget, humanRevisionAuthor, failureSignature, findingKey, changedLines, canonicalFindings, actionableFindings, remainingFindings, repairRequestSeen, validateRepairVerification } from './state.mjs';
-import { renderMessage, renderFinding, reviewStage } from './messages.mjs';
-import { publishedReview, previousFindings, latestReview, validateReviewRequest, requestReviewRepair } from './reviews.mjs';
+import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, TASK_WORKFLOW, gh, pages, command, json, save,
+  output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment,
+  publicText, authoredTitle, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
+import { repairBudget, humanRevisionAuthor, failureSignature, changedLines, canonicalFindings, actionableFindings,
+  remainingFindings, repairRequestSeen, validateRepairVerification, publishedReview, previousFindings,
+  latestReview, validateReviewRequest } from './state.mjs';
+import { documentationPath } from './validation.mjs';
 
 const taskFile = path.join(WORK, 'task.json');
-const event = () => json(process.env.GITHUB_EVENT_PATH);
 const commentsFor = (repo, n) => pages(`repos/${repo}/issues/${n}/comments?per_page=100`);
 const prFor = (repo, n) => gh(`repos/${repo}/pulls/${integer(n)}`);
 const runUrl = task => `https://github.com/${task.repo}/actions/runs/${task.run_id}`;
@@ -24,8 +23,44 @@ function canWrite(repo, actor) {
   }
 }
 export function sameRepository(pr, repo) { return pr.head?.repo?.full_name === repo && pr.base?.repo?.full_name === repo; }
-function message(task, stage, summary, options = {}) {
-  return renderMessage({ task, stage, summary, ...options });
+// Keep publication text here, beside the GitHub operations that use it.
+const html = value => redactor()(publicText(value)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const text = (value, limit = 360) => html(bounded(value, limit)).replace(/\s+/g, ' ').replace(/([*_[\]`#])/g, '\\$1');
+const headings = {
+  issue_investigating: 'Issue investigation', issue_pr: 'Pull request prepared', issue_findings: 'Investigation findings',
+  review_clean: 'Review completed', review_changes: 'Review findings', review_incomplete: 'Review incomplete',
+  repair_ci: 'CI repair', repair_review: 'Review findings repair', repair_pushed: 'Fix pushed',
+  repair_human: 'Repair needs human input', repair_limit: 'Repair limit reached',
+};
+function message(task, stage, summary, { result, next = '', commit, pr, extra = '', pending = false } = {}) {
+  let heading = headings[stage];
+  if (!heading) throw new Error('Unknown publication stage');
+  if (task.mode === 'deployment') heading = 'Deployment investigation: ' + heading;
+  if (task.mode === 'repair' && (task.record?.attempt || task.budget?.attempt)) heading += ' (' + (task.record?.attempt || task.budget.attempt) + '/3)';
+  const tests = result?.tests || [];
+  const checks = pending ? 'Not run yet.' : tests.length ? ['passed', 'failed', 'not_run'].map(status =>
+    tests.filter(test => test.status === status).length + ' ' + status.replace('_', ' ')).join(', ') : 'No commands run.';
+  const links = [];
+  if (task.repo && task.run_id) links.push('[Run](' + runUrl(task) + ')');
+  if (commit) links.push('[Commit](https://github.com/' + task.repo + '/commit/' + commit + ')');
+  if (pr) links.push('[PR](https://github.com/' + task.repo + '/pull/' + pr + ')');
+  if (task.ci_run_id) links.push('[PR checks](https://github.com/' + task.repo + '/actions/runs/' + task.ci_run_id + ')');
+  if (task.review_id) links.push('[Source review](https://github.com/' + task.repo + '/pull/' + task.number + '#pullrequestreview-' + task.review_id + ')');
+  const details = [
+    'Task: ' + (task.kind || task.mode), 'Input revision: ' + (task.head_sha || 'not selected'),
+    ...(task.record?.output_sha ? ['Published revision: ' + task.record.output_sha] : []),
+    ...(result ? ['Summary: ' + result.summary, 'Investigated:\n' + result.investigated.join('\n'),
+      'Checks:\n' + tests.map(test => test.status + ': ' + test.command + '\n' + test.details).join('\n'),
+      'Unresolved:\n' + result.unresolved.join('\n'),
+      'Finding verification:\n' + result.finding_verifications.map(item => item.finding_key + ': ' + item.status + '\n' + item.explanation).join('\n')] : []),
+    extra,
+  ].filter(Boolean).join('\n\n');
+  return '**' + heading + '**\n\n' + text(summary || result?.summary || '') + '\n\nChecks: ' + checks +
+    '\n\nNext: ' + text(next) + (links.length ? '\n\n' + links.join(' · ') : '') +
+    '\n\n<details>\n<summary>Technical details</summary>\n\n<pre>' + html(bounded(details, 12000)) + '</pre>\n\n</details>';
+}
+function renderFinding(finding) {
+  return '**[' + finding.priority + '] ' + text(finding.title, 240) + '**\n\n' + html(finding.body);
 }
 function notice(task, text, kind = 'notice', extra = '') {
   const history = records(commentsFor(task.repo, task.number));
@@ -47,97 +82,107 @@ async function associatedPRs(repo, run) {
   return result;
 }
 function verifyRun(run, repo, workflow, name) {
-  if (run.repository?.full_name !== repo || run.path !== `.github/workflows/${workflow}` || run.name !== name || run.status !== 'completed') throw new Error('Workflow run provenance does not match the configured workflow');
+  if (run.repository?.full_name !== repo || run.path !== `.github/workflows/${workflow}` || run.status !== 'completed') throw new Error('Workflow run provenance does not match the configured workflow');
+  const definition = gh(`repos/${repo}/actions/workflows/${workflow}`);
+  if (definition.id !== run.workflow_id || definition.path !== run.path || definition.name !== name) throw new Error('Workflow identity does not match the accepted task flow');
   sha(run.head_sha);
 }
-async function request(mode) {
-  const repo = repository(process.env.GH_REPO), payload = event();
-  const metadata = gh(`repos/${repo}`);
-  process.env.CODEX_DEFAULT_BRANCH = metadata.default_branch;
-  if (mode === 'issue') {
-    if (process.env.GITHUB_EVENT_NAME !== 'issues' || payload.action !== 'opened' || payload.repository.full_name !== repo || payload.issue.pull_request) throw new Error('Invalid issue event');
-    dispatch(repo, 'issue', integer(payload.issue.number));
-  } else if (mode === 'review') {
-    if (process.env.GITHUB_EVENT_NAME !== 'pull_request_target' ||
-      !['opened', 'reopened', 'synchronize', 'ready_for_review'].includes(payload.action) ||
-      payload.repository.full_name !== repo || payload.pull_request?.base?.repo?.full_name !== repo) throw new Error('Invalid trusted PR metadata event');
-    const pr = prFor(repo, integer(payload.pull_request.number));
-    if (pr.state !== 'open' || pr.base?.repo?.full_name !== repo || pr.head.sha !== sha(payload.pull_request.head.sha)) return;
-    dispatch(repo, 'review', pr.number, pr.head.sha);
-  } else if (mode === 'repair') {
-    const run = gh(`repos/${repo}/actions/runs/${integer(payload.workflow_run.id)}`);
-    verifyRun(run, repo, CI_WORKFLOW, 'CI');
-    if (run.conclusion === 'failure') dispatch(repo, 'repair', run.id);
-  } else throw new Error('Invalid request mode');
+
+function recordReviewFindings(request) {
+  save(path.join(WORK, 'review-findings.json'), request);
+  output('actionable_findings', 'true');
 }
-async function prepare() {
+export const approvalGuidance = 'If GitHub shows Approve workflows to run, select it on this PR to start CI. Code review and merging remain separate maintainer decisions.';
+
+async function prepare(kind) {
   output('proceed', 'false');
+  const modes = { issue: 'issue', review: 'review', 'ci-repair': 'repair', 'review-repair': 'repair', deployment: 'deployment' };
+  if (!Object.hasOwn(modes, kind)) throw new Error('Unknown task');
   const repo = repository(process.env.GH_REPO), metadata = gh(`repos/${repo}`);
-  process.env.CODEX_DEFAULT_BRANCH = metadata.default_branch;
   const currentRun = gh(`repos/${repo}/actions/runs/${integer(process.env.GITHUB_RUN_ID)}`);
+  const findingsFile = path.join(WORK, 'review-findings.json');
+  const request = kind === 'review-repair' && existsSync(findingsFile) ? json(findingsFile) : null;
+  const expectedSha = request?.head || process.env.TASK_EXPECTED_HEAD_SHA;
   const task = { repo, run_id: currentRun.id, created_at: currentRun.created_at, default_branch: branch(metadata.default_branch),
-    mode: process.env.CODEX_MODE, target: integer(process.env.CODEX_TARGET), repair_source: process.env.CODEX_REPAIR_SOURCE || 'ci', new_cycle: process.env.CODEX_NEW_CYCLE === 'true' };
-  if (!['issue', 'review', 'repair'].includes(task.mode)) throw new Error('Unknown task mode');
-  if (task.mode === 'repair' && !['ci', 'review'].includes(task.repair_source)) throw new Error('Invalid repair source');
+    kind, mode: modes[kind], repair_source: kind === 'review-repair' ? 'review' : 'ci',
+    new_cycle: process.env.TASK_RESET_REPAIR_BUDGET === 'true' };
   let issue, pr, ci, sourceReview;
-  if (process.env.GITHUB_EVENT_NAME === 'workflow_run') {
-    const source = gh(`repos/${repo}/actions/runs/${task.target}`);
-    verifyRun(source, repo, 'codex-review.yml', 'Codex PR review request');
-    if (source.event !== 'pull_request') throw new Error('Review request was not a PR event');
-    const prs = await associatedPRs(repo, source);
-    for (const extra of prs.slice(1)) dispatch(repo, 'review', extra.number, extra.head.sha);
-    if (!prs.length) return;
-    pr = prs[0]; task.target = pr.number;
-  } else if (task.mode === 'repair' && task.repair_source === 'review') {
-    if (!process.env.CODEX_EXPECTED_SHA) throw new Error('Review repair requires the exact reviewed SHA');
-    pr = prFor(repo, task.target);
-    task.review_id = integer(process.env.CODEX_REVIEW_ID);
-    sourceReview = gh(`repos/${repo}/pulls/${pr.number}/reviews/${task.review_id}`);
-    task.requested_findings = validateReviewRequest(sourceReview, sha(process.env.CODEX_EXPECTED_SHA), process.env.CODEX_REVIEW_FINDINGS).findings;
-    if (!task.requested_findings.length) return;
-  } else if (task.mode === 'repair') {
-    ci = gh(`repos/${repo}/actions/runs/${task.target}`);
-    verifyRun(ci, repo, CI_WORKFLOW, 'CI');
-    if (ci.conclusion !== 'failure' || !['pull_request', 'workflow_dispatch', 'push'].includes(ci.event) || ci.head_repository?.full_name !== repo) return;
-    const prs = await associatedPRs(repo, ci);
-    if (prs.length !== 1) return; // ambiguous branch ownership requires a human
-    pr = prs[0];
-  } else if (task.mode === 'review') pr = prFor(repo, task.target);
-  else {
+  if (kind === 'issue') {
+    task.target = integer(process.env.TASK_ISSUE_NUMBER);
     issue = gh(`repos/${repo}/issues/${task.target}`);
     if (issue.pull_request || issue.state !== 'open') return;
-  }
+  } else if (kind === 'deployment') {
+    task.target = integer(process.env.TASK_RELEASE_RUN_ID);
+    const context = json(path.join(WORK, 'deployment-context.json'));
+    if (context.run_id !== task.target || context.repo !== repo) throw new Error('Deployment context does not match the requested source');
+    task.source_attempt = context.attempt; task.deployment = context;
+    issue = gh(`repos/${repo}/issues/${integer(context.issue_number)}`);
+  } else if (kind === 'review-repair') {
+    if (!expectedSha) throw new Error('Review repair requires the exact reviewed SHA');
+    task.target = integer(request?.target || process.env.TASK_PR_NUMBER);
+    pr = prFor(repo, task.target);
+    task.review_id = integer(request?.review_id || process.env.TASK_REVIEW_ID);
+    sourceReview = gh(`repos/${repo}/pulls/${pr.number}/reviews/${task.review_id}`);
+    task.requested_findings = validateReviewRequest(sourceReview, sha(expectedSha)).findings;
+    if (!task.requested_findings.length) return;
+  } else if (process.env.TASK_CHECKS_RUN_ID) {
+    ci = gh(`repos/${repo}/actions/runs/${integer(process.env.TASK_CHECKS_RUN_ID)}`);
+    verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
+    if (!['pull_request', 'workflow_dispatch'].includes(ci.event)) return;
+    if (kind === 'review' ? ci.conclusion !== 'success' : !['failure', 'timed_out'].includes(ci.conclusion)) return;
+    if (kind === 'ci-repair' && ci.head_repository?.full_name !== repo) return;
+    const prs = await associatedPRs(repo, ci);
+    if (prs.length !== 1) return;
+    pr = prs[0];
+    if (process.env.TASK_PR_NUMBER && integer(process.env.TASK_PR_NUMBER) !== pr.number) throw new Error('The check run belongs to a different PR');
+    task.source_run_id = ci.id;
+    task.target = kind === 'review' ? pr.number : ci.id;
+  } else if (kind === 'review') {
+    task.target = integer(process.env.TASK_PR_NUMBER);
+    pr = prFor(repo, task.target);
+  } else throw new Error('CI repair requires checks_run_id');
   task.number = pr?.number || issue.number;
-  task.head_sha = sha(pr?.head.sha || gh(`repos/${repo}/commits/${encodeURIComponent(metadata.default_branch)}`).sha);
-  if (pr && process.env.CODEX_EXPECTED_SHA && sha(process.env.CODEX_EXPECTED_SHA) !== task.head_sha) return;
-  if (pr && pr.state !== 'open') return;
+  task.head_sha = sha(task.deployment?.source_sha || pr?.head.sha || gh(`repos/${repo}/commits/${encodeURIComponent(metadata.default_branch)}`).sha);
+  if (pr && expectedSha && sha(expectedSha) !== task.head_sha) return;
+  if (pr && (pr.state !== 'open' || pr.base.ref !== metadata.default_branch || pr.base.repo.full_name !== repo)) return;
   if (task.mode === 'repair' && pr && !sameRepository(pr, repo)) {
     notice(task, 'Automatic repair cannot push to an external fork branch. Apply the PR review findings in the contributor repository.');
     return;
   }
   if (process.env.CODEX_AUTOMATION_ENABLED === 'false') { notice(task, 'Codex automation is disabled by the repository CODEX_AUTOMATION_ENABLED variable.'); return; }
   const comments = commentsFor(repo, task.number), history = records(comments);
+  const origin = pr && recordFrom(pr);
+  if (task.mode === 'review' && origin?.kind === 'origin') {
+    const source = records(commentsFor(repo, integer(origin.issue)));
+    if (!source.some(record => ['issue', 'deployment'].includes(record.kind) && record.status === 'complete' && record.run_id === origin.run_id && record.pr === pr.number)) {
+      notice(task, 'The originating task has not finished publishing. Retry this review after publication completes.', 'publication-pending'); return;
+    }
+  }
   task.history = history;
   task.context = { repository: repo, mode: task.mode, head_sha: task.head_sha,
     discussion: comments.slice(-6).map(c => ({ author: c.user?.login, body: bounded(publicText(c.body), 800) })),
-    previous_attempts: history.filter(r => ['repair', 'issue'].includes(r.kind)).slice(-3).map(r => ({ kind: r.kind, source: r.source, cycle: r.cycle, attempt: r.attempt, input_sha: r.input_sha, output_sha: r.output_sha, summary: r.summary, finding_verifications: (r.finding_verifications || []).map(v => ({ ...v, explanation: bounded(v.explanation, 300) })) })) };
+    previous_attempts: history.filter(r => ['repair', 'issue', 'deployment'].includes(r.kind)).slice(-3).map(r => ({ kind: r.kind, source: r.source, cycle: r.cycle, attempt: r.attempt, input_sha: r.input_sha, output_sha: r.output_sha, summary: r.summary, finding_verifications: (r.finding_verifications || []).map(v => ({ ...v, explanation: bounded(v.explanation, 300) })) })) };
   if (issue) {
-    if (history.some(r => r.kind === 'issue' && r.status === 'complete' && r.outcome !== 'external_failure')) return;
-    task.branch = `codex/issue-${issue.number}`;
-    const existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':' + task.branch)}&per_page=100`);
+    if (history.some(r => r.kind === task.mode && r.status === 'complete' && r.outcome !== 'external_failure' && (task.mode !== 'deployment' || (r.source_run === task.target && r.source_attempt === task.source_attempt)))) return;
+    task.branch = task.mode === 'deployment' ? `deployment-${task.target}-${task.source_attempt}` : `issue-${issue.number}`;
+    let existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':' + task.branch)}&per_page=100`);
+    if (!existing.length && task.mode === 'issue') existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':codex/issue-' + issue.number)}&per_page=100`);
     if (existing.length) {
-      comment(repo, issue.number, { kind: 'issue', status: 'complete', pr: existing[0].number, run_id: task.run_id }, message(task, 'issue_pr', 'This issue already has a prepared pull request.', { pr: existing[0].number, next: 'Continue review on the existing PR.' }));
+      comment(repo, issue.number, { kind: task.mode, source_run: task.target, source_attempt: task.source_attempt, status: 'complete', pr: existing[0].number, run_id: task.run_id }, message(task, 'issue_pr', 'This issue already has a prepared pull request.', { pr: existing[0].number, next: 'Continue review on the existing PR.' }));
       return;
     }
+    if (task.deployment) task.context.deployment = task.deployment;
     task.context.issue = { number: issue.number, title: bounded(issue.title, 500), body: bounded(issue.body, 16000), author: issue.user.login };
   } else {
     task.branch = branch(pr.head.ref); task.base_branch = branch(pr.base.ref);
     const reviews = pages(`repos/${repo}/pulls/${pr.number}/reviews?per_page=100`);
     if (task.mode === 'review') {
-      const existingReview = reviews.filter(r => recordFrom(r)?.kind === 'review' && recordFrom(r)?.head_sha === task.head_sha).at(-1);
+      const existingReview = reviews.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
       if (existingReview) {
         const record = publishedReview(existingReview, task.head_sha);
-        if (record) requestReviewRepair(task, existingReview, record, dispatch, gh);
+        task.skip_reason = 'This revision already has a completed independent review.';
+        save(taskFile, task);
+        if (actionableFindings(record.findings).length) recordReviewFindings({ target: pr.number, head: task.head_sha, source: 'review', review_id: existingReview.id });
         return;
       }
     }
@@ -161,14 +206,19 @@ async function prepare() {
       previous_reviews: reviews.slice(-4).map(r => ({ author: r.user?.login, body: bounded(publicText(r.body), 1200) })),
       previous_inline_comments: inlineDiscussion.slice(-6).map(c => ({ author: c.user?.login, path: c.path, line: c.line, commit_id: c.commit_id, body: bounded(c.body, 800) })) };
     if (remaining <= 0 || files.some(f => (f.patch || '').length > 3000)) task.context.pr.diff_is_partial = true;
+    if (ci && task.mode === 'review') {
+      const jobs = pages(`repos/${repo}/actions/runs/${ci.id}/attempts/${ci.run_attempt}/jobs?per_page=100`).flatMap(page => page.jobs || []);
+      task.context.ci = { id: ci.id, attempt: ci.run_attempt, head_sha: ci.head_sha, conclusion: ci.conclusion, url: ci.html_url,
+        jobs: jobs.map(job => ({ name: job.name, conclusion: job.conclusion, steps: (job.steps || []).map(step => ({ name: step.name, conclusion: step.conclusion })) })) };
+    }
     if (task.mode === 'repair') {
       const branchInfo = gh(`repos/${repo}/branches/${encodeURIComponent(task.branch)}`);
       if (task.branch === metadata.default_branch || branchInfo.protected) { notice(task, 'Automatic repair will not push to a protected or default branch.', 'repair-policy'); return; }
       let resetId = '';
-      if (task.new_cycle || process.env.CODEX_CYCLE_REQUEST) {
-        const cycleRun = process.env.CODEX_CYCLE_REQUEST ? gh(`repos/${repo}/actions/runs/${integer(process.env.CODEX_CYCLE_REQUEST)}`) : currentRun;
+      if (task.new_cycle || process.env.TASK_BUDGET_RESET_RUN_ID) {
+        const cycleRun = process.env.TASK_BUDGET_RESET_RUN_ID ? gh(`repos/${repo}/actions/runs/${integer(process.env.TASK_BUDGET_RESET_RUN_ID)}`) : currentRun;
         const actor = cycleRun.triggering_actor || cycleRun.actor;
-        if (cycleRun.path !== `.github/workflows/${WORKER_WORKFLOW}` || cycleRun.event !== 'workflow_dispatch') throw new Error('Invalid manual repair-cycle provenance');
+        if (cycleRun.path !== `.github/workflows/${TASK_WORKFLOW}` || cycleRun.event !== 'workflow_dispatch') throw new Error('Invalid manual repair-cycle provenance');
         if (actor?.type !== 'User' || !canWrite(repo, actor.login)) throw new Error('Only a repository maintainer can explicitly reset a repair cycle');
         task.cycle_request = cycleRun.id;
         resetId = `manual-${cycleRun.id}`;
@@ -180,8 +230,9 @@ async function prepare() {
       if (sourceReview && currentReview && currentReview.id !== sourceReview.id) return;
       if (!ci && sourceReview) {
         const candidates = gh(`repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${task.head_sha}&status=failure&per_page=10`).workflow_runs || [];
-        ci = candidates.find(run => run.head_sha === task.head_sha && run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === `.github/workflows/${CI_WORKFLOW}` && run.name === 'CI' && run.status === 'completed' && run.conclusion === 'failure');
+        ci = candidates.find(run => run.head_sha === task.head_sha && run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === `.github/workflows/${CI_WORKFLOW}` && run.status === 'completed' && run.conclusion === 'failure');
       }
+      if (ci) verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
       let failed = [];
       if (ci) {
         const jobs = pages(`repos/${repo}/actions/runs/${ci.id}/attempts/${ci.run_attempt}/jobs?per_page=100`).flatMap(p => p.jobs || []);
@@ -222,14 +273,17 @@ async function prepare() {
   const fetchRef = pr && !sameRepository(pr, repo) ? `refs/pull/${integer(pr.number)}/head` : task.head_sha;
   command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1', `https://github.com/${repo}.git`, fetchRef], { cwd: ROOT });
   if (fetchRef !== task.head_sha && command('git', ['rev-parse', 'FETCH_HEAD'], { cwd: ROOT }).trim() !== task.head_sha) throw new Error('PR head changed during fetch; this review request is stale');
+  rmSync(path.join(ARTIFACTS, 'result.json'), { force: true });
+  rmSync(path.join(ARTIFACTS, 'error.json'), { force: true });
   save(taskFile, task);
+  output('mode', task.mode); output('number', String(task.number));
   save(path.join(ARTIFACTS, 'task.json'), { mode: task.mode, number: task.number, head_sha: task.head_sha, run_id: task.run_id, ci_run_id: task.ci_run_id });
   output('proceed', 'true');
 }
 function recheck() {
   const task = json(taskFile);
-  const current = task.mode === 'issue' ? gh(`repos/${task.repo}/issues/${task.number}`) : prFor(task.repo, task.number);
-  const valid = current.state === 'open' && (task.mode === 'issue' || current.head.sha === task.head_sha);
+  const current = ['issue', 'deployment'].includes(task.mode) ? gh(`repos/${task.repo}/issues/${task.number}`) : prFor(task.repo, task.number);
+  const valid = current.state === 'open' && (['issue', 'deployment'].includes(task.mode) || current.head.sha === task.head_sha);
   output('current', String(valid));
   if (!valid && task.record) comment(task.repo, task.number, { ...task.record, status: 'superseded' },
     message(task, task.mode === 'repair' ? 'repair_human' : 'issue_findings', 'The revision changed or the item was closed before execution.', { next: 'Use the latest revision; this attempt will not publish changes.' }), task.comment_id);
@@ -242,14 +296,22 @@ function reserve() {
     input_sha: task.head_sha, output_sha: null, ci_run_id: task.ci_run_id, ci_run_attempt: task.ci_run_attempt,
     review_ids: task.review_ids, finding_keys: (task.review_findings || []).map(f => f.key), request_keys: task.request_keys,
     failure_signature: task.failure_signature, run_id: task.run_id,
-  } : { kind: 'issue', status: 'started', input_sha: task.head_sha, run_id: task.run_id };
-  const previous = task.mode === 'issue' ? task.history?.filter(r => r.kind === 'issue').at(-1)?.comment_id : undefined;
+  } : { kind: task.mode, status: 'started', input_sha: task.head_sha, run_id: task.run_id, source_run: task.target, source_attempt: task.source_attempt };
+  const previous = ['issue', 'deployment'].includes(task.mode) ? task.history?.filter(r => r.kind === task.mode).at(-1)?.comment_id : undefined;
   task.record = record;
   const created = comment(task.repo, task.number, record, message(task,
-    task.mode === 'issue' ? 'issue_investigating' : task.repair_source === 'review' ? 'repair_review' : 'repair_ci',
-    task.mode === 'issue' ? 'Investigating the issue and implementing an appropriate focused solution.' : 'Verifying the reported defect and checking the relevant code and tests.',
+    ['issue', 'deployment'].includes(task.mode) ? 'issue_investigating' : task.repair_source === 'review' ? 'repair_review' : 'repair_ci',
+    ['issue', 'deployment'].includes(task.mode) ? 'Investigating the issue and implementing an appropriate focused solution.' : 'Verifying the reported defect and checking the relevant code and tests.',
     { pending: true, next: 'Investigate, verify and run focused checks.' }), previous);
   task.comment_id = created.id; save(taskFile, task);
+  if (task.mode === 'repair' && task.repair_source === 'review') {
+    const review = gh(`repos/${task.repo}/pulls/${task.number}/reviews/${task.review_id}`);
+    const record = publishedReview(review, task.head_sha);
+    if (!record) throw new Error('The source review no longer matches the reserved repair');
+    if (!record.repair_requested) gh(`repos/${task.repo}/pulls/${task.number}/reviews/${task.review_id}`, {
+      method: 'PUT', body: { body: review.body.replace(/<!-- codex-agent:v1 (\{[^\n]*\}) -->/, () => marker({ ...record, repair_requested: true })) },
+    });
+  }
 }
 function gitContext(task, root = ROOT, work = WORK) {
   // A separate index and trusted Git dir keep model-created .git/config, hooks,
@@ -272,7 +334,7 @@ export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   for (let i = 0; i + 1 < raw.length && raw[i]; i += 2) entries.push({ mode: raw[i].split(' ')[1], file: raw[i + 1] });
   validateChanges(entries);
   if (!entries.length) return null;
-  if (task.review_findings?.length && !entries.some(e => /(?:\.(?:spec|test)\.|(?:^|\/)(?:tests?|__tests__)\/)/.test(e.file))) throw new Error('Review repairs must add or update regression coverage');
+  if (task.review_findings?.some(f => !documentationPath(f.path)) && !entries.some(e => /(?:\.(?:spec|test)\.|(?:^|\/)(?:tests?|__tests__)\/)/.test(e.file))) throw new Error('Review repairs must add or update regression coverage');
   if (entries.some(e => e.file === 'package.json')) {
     const before = JSON.parse(git(['show', `${task.head_sha}:package.json`]));
     const after = JSON.parse(git(['show', ':package.json']));
@@ -282,28 +344,9 @@ export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   if (Buffer.byteLength(diff) > 1024 * 1024) throw new Error('Patch exceeds 1 MiB limit');
   if (redactor()(diff) !== diff) throw new Error('Potential credential material found in patch; publishing blocked');
   const tree = git(['write-tree']).trim();
-  const subject = bounded(result.title.replace(/[\r\n]/g, ' '), 100) || `Address ${task.mode} #${task.number}`;
-  const message = `${subject}\n\n${bounded(result.summary, 1800)}\n\nRefs #${task.number}\nCodex-Automation: ${task.mode}\n${task.budget ? `Codex-Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
+  const subject = authoredTitle(result.title) || `Address ${task.mode} #${task.number}`;
+  const message = `${subject}\n\n${bounded(result.summary, 1800)}\n\nRefs #${task.number}\nRepository-Task: ${task.mode}\n${task.budget ? `Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
   return git(['-c', 'commit.gpgsign=false', 'commit-tree', tree, '-p', task.head_sha], { input: message }).trim();
-}
-export function nextRuns(task, prNumber, head, api = gh, queueReview = dispatch, startEvents = false) {
-  if (startEvents && startPublishedWorkflows(task, prNumber, head, api)) {
-    queueReview(task.repo, 'review', prNumber, head);
-    return;
-  }
-  // GITHUB_TOKEN pushes cannot be relied upon to trigger downstream workflows.
-  // Dispatch is supported with that token and a pinned branch/SHA check in CI.
-  const endpoint = `repos/${task.repo}/actions/workflows/${CI_WORKFLOW}/dispatches`;
-  try {
-    api(endpoint, { method: 'POST', body: { ref: task.branch, inputs: { pr_number: String(prNumber), expected_sha: head } } });
-  } catch (error) {
-    // A feature branch may predate the new optional dispatch inputs. A 422
-    // starts no run, so retrying without inputs cannot duplicate a dispatched CI.
-    // Other errors, especially uncertain network failures, are never retried.
-    if (error.httpStatus !== 422) throw error;
-    api(endpoint, { method: 'POST', body: { ref: task.branch } });
-  }
-  queueReview(task.repo, 'review', prNumber, head);
 }
 export function pushArguments(task, commit, remote = `https://github.com/${task.repo}.git`) {
   return ['-c', 'core.hooksPath=/dev/null', '-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential',
@@ -314,10 +357,10 @@ async function publishReview(task, result) {
   const pr = prFor(task.repo, task.number);
   if (pr.head.sha !== task.head_sha || pr.state !== 'open') return;
   const prior = pages(`repos/${task.repo}/pulls/${task.number}/reviews?per_page=100`);
-  const existing = prior.filter(r => recordFrom(r)?.kind === 'review' && recordFrom(r)?.head_sha === task.head_sha).at(-1);
+  const existing = prior.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
   if (existing) {
     const record = publishedReview(existing, task.head_sha);
-    if (record) requestReviewRepair(task, existing, record, dispatch, gh);
+    if (record && actionableFindings(record.findings).length) recordReviewFindings({ target: task.number, head: task.head_sha, source: 'review', review_id: existing.id });
     return;
   }
   if (task.context.pr.diff_is_partial) {
@@ -338,19 +381,20 @@ async function publishReview(task, result) {
   const summary = result.review_status === 'incomplete' ? 'Review incomplete. ' + (result.unresolved[0] || 'Some relevant evidence was unavailable.') :
     significant.length ? (fresh.some(f => f.priority !== 'P3') ? significant.slice(0, 2).map(f => f.title).join('; ') : significant.length + ' previously reported significant finding(s) remain unresolved.') :
       'No significant defects were found in the reviewed changes.';
-  const next = needsRepair ? 'Repair Agent will independently verify the actionable findings.' : result.review_status === 'incomplete' ?
+  const next = needsRepair ? 'A separate fresh repair can verify the actionable findings, subject to branch eligibility and the remaining budget.' : result.review_status === 'incomplete' ?
     'Resolve the review limits and request another review.' : significant.length ? 'Review the feedback and prior repair explanations before merging.' : 'Human review and merge when ready.';
   const details = 'Current findings:\n' + findings.map(f => '[' + f.priority + '] ' + f.key + ' ' + f.path + ':' + f.line + ' ' + f.title + '\n' + f.body + '\nActionable: ' + f.actionable).join('\n\n');
-  const body = marker(record) + '\n' + message(task, reviewStage(result, significant), summary, { result, next, extra: details });
+  const body = marker(record) + '\n' + message(task, result.review_status === 'incomplete' ? 'review_incomplete' : significant.length ? 'review_changes' : 'review_clean', summary, { result, next, extra: details });
   if (Buffer.byteLength(body) > 63000) throw new Error('Published review exceeds the safe comment limit');
   const created = gh(`repos/${task.repo}/pulls/${task.number}/reviews`, { method: 'POST', body: {
     commit_id: task.head_sha, event: 'COMMENT', body,
     comments: inline.map(f => ({ path: f.path, line: f.line, side: 'RIGHT', body: renderFinding(f) })),
   } });
-  requestReviewRepair(task, { ...created, body }, record, dispatch, gh);
+  if (needsRepair) recordReviewFindings({ target: task.number, head: task.head_sha, review_id: integer(created.id) });
 }
-async function publish() {
-  const task = json(taskFile); process.env.CODEX_DEFAULT_BRANCH = task.default_branch;
+async function publish(reviewOnly) {
+  const task = json(taskFile);
+  if ((task.mode === 'review') !== reviewOnly) throw new Error('Publication command does not match the prepared task');
   const resultFile = path.join(ARTIFACTS, 'result.json');
   if (!existsSync(resultFile)) {
     const reason = existsSync(path.join(ARTIFACTS, 'error.json')) ? json(path.join(ARTIFACTS, 'error.json')).message : 'Execution failed or timed out.';
@@ -382,7 +426,7 @@ async function publish() {
         next: disputed ? 'Review the explanation. This finding will not be retried in this cycle.' : task.mode === 'repair' ? 'Resolve the reported blocker before retrying.' : 'Follow the findings or provide the requested information.' }), task.comment_id);
     return;
   }
-  if (task.mode === 'issue' && gh(`repos/${task.repo}/issues/${task.number}`).state !== 'open') {
+  if (['issue', 'deployment'].includes(task.mode) && gh(`repos/${task.repo}/issues/${task.number}`).state !== 'open') {
     comment(task.repo, task.number, { ...task.record, status: 'complete', outcome: 'no_change' },
       message(task, 'issue_findings', 'The issue was closed during investigation.', { result, next: 'No further action.' }), task.comment_id);
     return;
@@ -397,7 +441,7 @@ async function publish() {
     const remote = command('git', ['ls-remote', `https://github.com/${task.repo}.git`, `refs/heads/${task.branch}`], {
       env: cleanEnvironment({ GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' }),
     });
-    if (remote.trim()) throw new Error('Issue branch already exists; human inspection is required before resuming');
+    if (remote.trim()) throw new Error('Task branch already exists; human inspection is required before resuming');
   }
   task.record.output_sha = commit; task.record.status = 'publishing';
   comment(task.repo, task.number, task.record, message(task, task.mode === 'repair' ? task.repair_source === 'review' ? 'repair_review' : 'repair_ci' : 'issue_investigating',
@@ -405,22 +449,23 @@ async function publish() {
   save(taskFile, task);
   command('git', pushArguments(task, commit), { cwd: ROOT });
   let prNumber = task.number;
-  if (task.mode === 'issue') {
+  if (['issue', 'deployment'].includes(task.mode)) {
     const issue = gh(`repos/${task.repo}/issues/${task.number}`);
-    const description = message(task, 'issue_pr', result.summary, { result, commit, next: 'CI and independent review.', extra: 'Refs #' + task.number });
+    const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance, extra: 'Refs #' + task.number });
     const pr = gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
-      head: task.branch, base: task.default_branch, title: bounded(result.title || issue.title, 200),
+      head: task.branch, base: task.default_branch, title: authoredTitle(result.title || issue.title),
       body: marker({ kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id }) + '\n' + description,
       draft: result.tests.some(t => t.status === 'failed') || !result.tests.some(t => t.status === 'passed'),
     } });
     prNumber = pr.number;
     comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) },
-      message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next: 'CI and independent review.' }), task.comment_id);
+      message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next: approvalGuidance }), task.comment_id);
   } else {
     comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) },
-      message(task, 'repair_pushed', result.summary, { result, commit, next: 'CI and independent review.' }), task.comment_id);
+      message(task, 'repair_pushed', result.summary, { result, commit, next: approvalGuidance }), task.comment_id);
   }
-  nextRuns(task, prNumber, commit, gh, dispatch, trustedWorkflowTree(commit));
+  output('pr', String(prNumber));
+  output('head_sha', commit);
 }
 async function reportFailure() {
   if (!existsSync(taskFile)) return;
@@ -436,13 +481,40 @@ async function reportFailure() {
 async function main() {
   if (process.env.GITHUB_SERVER_URL && process.env.GITHUB_SERVER_URL !== 'https://github.com') throw new Error('Only github.com is configured');
   const action = process.argv[2];
-  if (action === 'request') return request(process.argv[3]);
-  if (action === 'prepare') return prepare();
+  if (action === 'summary') {
+    if (!process.env.GITHUB_STEP_SUMMARY) return;
+    const task = existsSync(taskFile) ? json(taskFile) : {};
+    const auth = path.join(ARTIFACTS, 'authentication.json');
+    const persistence = existsSync(auth) ? json(auth).persistence : 'not_attempted';
+    const results = ['issue', 'review', 'repair', 'deployment'].flatMap(mode => {
+      const file = path.join(ARTIFACTS, mode + '-result.json');
+      if (!existsSync(file)) return [];
+      const result = json(file);
+      return [mode + ': ' + result.outcome + (mode === 'review' ? ' (' + result.review_status + ')' : ''), ...result.tests.map(t => t.status + ': ' + t.command)];
+    });
+    const authState = existsSync(auth) ? json(auth) : {};
+    const failureFile = path.join(ARTIFACTS, 'error.json');
+    const reason = existsSync(failureFile) ? 'Failed: ' + json(failureFile).message : authState.reason || task.skip_reason || 'No model execution was completed. The request was skipped or superseded; see eligibility details.';
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, '# Repository task\n\n' + [
+      'Trigger: ' + process.env.GITHUB_EVENT_NAME, 'Task: ' + (task.kind || 'not selected'),
+      'Target: ' + (task.number || process.env.TASK_PR_NUMBER || process.env.TASK_ISSUE_NUMBER || process.env.TASK_RELEASE_RUN_ID || process.env.TASK_CHECKS_RUN_ID || 'not selected'),
+      'Revision: ' + (task.head_sha || 'not selected'),
+      'Authentication persistence: ' + persistence, ...results,
+      ...(!results.length ? [reason] : []),
+    ].map(line => '- ' + publicText(line).replace(/[\r\n]/g, ' ')).join('\n') + '\n');
+    return;
+  }
+  if (action === 'prepare-issue') return prepare('issue');
+  if (action === 'prepare-review') return prepare('review');
+  if (action === 'prepare-ci-repair') return prepare('ci-repair');
+  if (action === 'prepare-review-repair') return prepare('review-repair');
+  if (action === 'prepare-deployment') return prepare('deployment');
   if (action === 'reserve') return reserve();
   if (action === 'recheck') return recheck();
-  if (action === 'publish') return publish();
+  if (action === 'publish-review') return publish(true);
+  if (action === 'publish-changes') return publish(false);
   if (action === 'report-failure') return reportFailure();
-  throw new Error('Unknown coordinator action');
+  throw new Error('Unknown task command');
 }
 if (process.argv[1] === import.meta.filename) main().catch(error => {
   const reason = redactor()(error.message);

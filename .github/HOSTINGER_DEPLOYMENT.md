@@ -1,6 +1,6 @@
 # Hostinger deployment
 
-After a push to `master` passes CI, GitHub uploads the validated `app/` build to
+After a production-relevant push to `master` passes App release validation, GitHub uploads the validated `app/` build to
 Hostinger, where it is served at https://sam.erkiner.com/app/.
 
 ## Connection settings
@@ -27,6 +27,14 @@ Public resource verification still uses HTTPS.
 
 ## Deployment and checks
 
+App release uses GitHub's native path filters. Production source and assets under
+src, package inputs, production/TypeScript/service-worker/browser configuration
+and the Node version qualify. Known source test files are excluded. README,
+documentation, workflow, automation and standalone test changes do not start a
+production run. Mixed application/documentation changes qualify. This is a coarse
+file-based rule, not a comparison of compiled app contents.
+
+
 CI builds and tests the app, then retains that exact build for 30 days as
 `production-<commit SHA>`. The deployment job downloads it without rebuilding.
 PRs cannot deploy. The `production` environment records deployments and limits
@@ -43,7 +51,9 @@ assets and existing server configuration are preserved; no remote files are
 deleted. Publication is sequential, not a fully atomic release.
 
 Automatic and manual uploads share one queue. Active uploads are not cancelled
-by newer releases. Superseded automatic builds skip before publication starts.
+by newer releases. Before automatic publication, the candidate must still be an ancestor of master
+and the newest production push run. Documentation pushes create no production
+run, so they do not displace a pending app release. Superseded app builds skip.
 Transient upload failures receive up to three attempts with 30-second socket
 timeouts. A successful upload is followed by HTTPS comparison of the page,
 service-worker resources and manifests with the artifact.
@@ -64,32 +74,33 @@ There is no automatic rollback; a later master push publishes the newer build.
 
 ## Local verification
 
-```sh
-python3 -m unittest discover -s .github/scripts/deploy -p 'test_*.py'
-```
-
-Tests cover FTP connection behavior, credentials, folder checks, publication
-ordering, bounded retries, public-content mismatches and artifact provenance.
+The release, incident and FTP runtime helpers are unchanged by the workflow
+readability cleanup. This learning POC no longer retains automation test files.
+Verify helper syntax and provenance/freshness behavior with temporary synthetic
+inputs when changing deployment code. Keep the production application build,
+unit checks and browser checks. Never publish to production solely to verify
+this cleanup.
 
 ## Failed production deployments
 
-A failed, timed-out or cancelled production publication is reported as
-**“Deployment failed; latest changes are not confirmed live.”** in the release
-summary and a dedicated deployment incident. The independent **Deployment
-incidents** workflow handles both automatic CI releases and manual uploads.
-It checks the completed run and publication job, so a failed PR build,
-pre-deployment validation failure or read-only connection check does not create
-a production incident.
+Only an attempted publication failure starts Deployment investigation as jobs
+inside the same failed release run. There is no incident listener after every CI
+completion. Build/validation failures, skipped uploads and connection-only checks
+do not open production incidents. Hard cancellation or runner loss may require
+manual investigation recovery.
 
-Each incident includes the workflow commit, failed run/attempt, failed job links,
-and instructions to retry a retained build or roll back. Code fixes go through
-a recovery PR; configuration and hosting problems can be corrected directly.
-Repeated failures of the same run update and reopen its existing incident.
-Confirm successful upload and public-file verification before closing it.
-Incidents are not automatically closed by a connection check or later build.
+Investigation verifies the source run/attempt and publication step, reuses one
+linked incident, and records attempt history, workflow revision, source build
+revision, failed steps and recovery links. It can run while the failed parent
+release is still active. Historical recovery verifies completed source attempts.
+Both current App release and historical CI names remain recognized.
 
-Default-branch failures no longer enter the PR-only repair queue. The incident
-reporter has issue-write permission but no hosting secrets or code-write access.
-Automatic investigation and recovery PR creation are separate future work;
-creating an incident with the built-in GitHub token does not trigger the
-repository's issue-opened automation.
+The model gets sanitized evidence and the source-artifact revision, without
+hosting credentials. Application fixes become a PR. Hosting or credential
+blockers receive concrete human actions. Investigation cannot redeploy and does
+not rely on a bot-created issue producing another event.
+
+Use Deployment investigation's Run workflow form for historical recovery. Supply
+`failed_release_run_id`, `release_attempt`, and the validated `build_run_id`.
+Use Deploy Hostinger manually separately to retry publication or roll back.
+Confirm upload and public-file verification before closing the incident.

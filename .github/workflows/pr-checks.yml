@@ -1,0 +1,79 @@
+name: PR checks
+run-name: "PR checks · #${{ github.event.pull_request.number || inputs.pr_number }} · ${{ github.event.pull_request.title || inputs.expected_head_sha }}"
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR to validate again; does not approve pending workflows
+        required: true
+        type: string
+      expected_head_sha:
+        description: Exact PR head to validate
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate app
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+          ref: ${{ github.event.pull_request.merge_commit_sha || inputs.expected_head_sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Select documentation-only validation
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
+        run: node .github/scripts/tasks/validation.mjs
+      - name: Check documentation patch whitespace
+        if: steps.scope.outputs.documentation_only == 'true'
+        run: git diff --check HEAD^ HEAD
+      - name: Install dependencies from lockfile
+        if: steps.scope.outputs.documentation_only != 'true'
+        run: npm ci
+      - name: Install Chromium for unit and browser tests
+        if: steps.scope.outputs.documentation_only != 'true'
+        run: npx playwright install --with-deps --no-shell chromium
+      - name: Share Chromium with Karma
+        if: steps.scope.outputs.documentation_only != 'true'
+        run: node -e 'require("node:fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_BIN=" + require("@playwright/test").chromium.executablePath() + "\n")'
+      - name: Build production application
+        if: steps.scope.outputs.documentation_only != 'true'
+        run: npm run build -- --configuration=production
+      - name: Run unit tests
+        if: steps.scope.outputs.documentation_only != 'true'
+        run: npm run test:ci
+      - name: Check production rendering and interactions
+        if: steps.scope.outputs.documentation_only != 'true'
+        run: npm run e2e
+      - name: Retain browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: browser-failure-diagnostics
+          path: output/playwright/
+          if-no-files-found: ignore
+          retention-days: 7

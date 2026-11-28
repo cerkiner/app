@@ -1,4 +1,5 @@
-import { BOT, MAX_ATTEMPTS, sha256 } from './lib.mjs';
+import { documentationPath } from './validation.mjs';
+import { BOT, MAX_ATTEMPTS, sha256, recordFrom, validateResult } from './lib.mjs';
 
 // Count reservations, including crashes and failed executions. A bot commit is
 // linked to its cycle BEFORE pushing, so a new SHA never replenishes the budget.
@@ -25,13 +26,6 @@ export function humanRevisionAuthor(commit) {
 }
 export function failureSignature(jobs) {
   return sha256(JSON.stringify(jobs.map(j => [j.name, j.steps?.filter(s => s.conclusion === 'failure').map(s => s.name)])));
-}
-// GitHub reads repository secrets when a run is QUEUED, rather than when a
-// concurrency lock is acquired. Equality is stale too (timestamps have seconds).
-export function credentialsAreFresh(runCreatedAt, secretUpdatedAt) {
-  const created = Date.parse(runCreatedAt), updated = Date.parse(secretUpdatedAt);
-  if (!Number.isFinite(created) || !Number.isFinite(updated)) throw new Error('Missing credential freshness metadata');
-  return created > updated;
 }
 export function findingKey(finding) {
   return sha256(`${finding.path}:${finding.title.trim().toLowerCase().replace(/\s+/g, ' ')}`).slice(0, 20);
@@ -76,5 +70,39 @@ export function validateRepairVerification(result, findings = []) {
   const fixed = result.finding_verifications.filter(v => v.status === 'verified_fixed');
   if (fixed.length && result.outcome !== 'changes') throw new Error('A verified fix must include changes');
   if (findings.length && result.outcome === 'changes' && !fixed.length) throw new Error('No verified finding justifies the proposed repair');
-  if (fixed.length && !result.tests.some(t => t.status === 'passed' && /regression/i.test(t.command + ' ' + t.details))) throw new Error('Review repairs require a passing regression check');
+  if (fixed.some(v => !documentationPath(findings.find(f => f.key === v.finding_key)?.path)) && !result.tests.some(t => t.status === 'passed' && /regression/i.test(t.command + ' ' + t.details))) throw new Error('Review repairs require a passing regression check');
+}
+
+// Review records keep the existing authenticated bot markers and finding keys.
+export function publishedReview(review, head) {
+  const record = recordFrom(review);
+  if (!record || record.kind !== 'review' || review.state !== 'COMMENTED' ||
+      review.commit_id !== head || record.head_sha !== head || !Array.isArray(record.findings)) return null;
+  validateResult({ outcome: 'review', title: '', summary: '', investigated: [], tests: [],
+    unresolved: record.review_status === 'incomplete' ? ['See published review.'] : [],
+    findings: record.findings, finding_verifications: [], review_status: record.review_status }, 'review');
+  if (record.findings.some(f => !/^[a-f0-9]{20}$/.test(f.key))) throw new Error('Published finding keys are invalid');
+  return record;
+}
+export function previousFindings(reviews) {
+  const unique = new Map();
+  for (const review of reviews) {
+    const record = recordFrom(review);
+    for (const finding of record?.kind === 'review' && Array.isArray(record.findings) ? record.findings : []) unique.set(finding.key, finding);
+  }
+  return [...unique.values()].slice(-20);
+}
+export function latestReview(reviews, head) {
+  return reviews.filter(review => publishedReview(review, head)).at(-1);
+}
+export function validateReviewRequest(review, head, input) {
+  const record = publishedReview(review, head);
+  if (!record) throw new Error('Review repair requires a published Codex review of the exact revision');
+  const findings = actionableFindings(record.findings);
+  if (input) {
+    let supplied;
+    try { supplied = JSON.parse(input); } catch { throw new Error('Invalid structured review request'); }
+    if (JSON.stringify(supplied) !== JSON.stringify(findings)) throw new Error('Requested findings differ from the published review');
+  }
+  return { record, findings };
 }

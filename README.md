@@ -28,7 +28,8 @@ Open http://localhost:4200. The local server reloads when source files change.
 3. Upload supporting assets first, then `index.html` and finally `ngsw.json`. Retain previous hashed assets so existing visitors can finish using their cached version.
 4. Verify the live page and service-worker resources after uploading. The deployment target is recorded in `.hostinger/site.json`.
 
-GitHub Actions deploys validated builds after successful `master` push validation.
+GitHub Actions deploys validated builds after production-relevant `master` pushes.
+README and documentation changes do not start production deployment.
 Set the four repository FTP secrets described in
 [the deployment guide](.github/HOSTINGER_DEPLOYMENT.md). No variables are needed.
 The guide also covers the optional connection check, retries and rollback.
@@ -37,11 +38,14 @@ The hosting document root is shared with WordPress, the blog and the API. Use ta
 
 ## Checking Changes
 
-Autonomous issue investigation, PR review and bounded CI repair are configured in
-GitHub Actions. See [.github/CODEX_AUTOMATION.md](.github/CODEX_AUTOMATION.md) for
-subscription credential setup, security boundaries and tests. All issues and PRs
-are investigated automatically regardless of creator or repository visibility.
-Failed CI starts repair on repository-owned feature branches automatically.
+Issue implementation, independent PR review and bounded CI repair use separate
+fresh sessions in purpose-specific workflows. See [the automation guide](.github/AUTOMATION.md)
+for subscription login setup, native permissions, recovery and tests. PR checks
+run first; their follow-up repairs failures or reviews passing revisions and fixes
+confirmed findings. Documentation is reviewed for coherence as well.
+
+When GitHub requires it, select **Approve workflows to run** on the PR page to
+start checks. This authorizes CI execution, not code acceptance or merging.
 
 Use Node 24 from `.nvmrc` (`nvm install && nvm use`). Install the locked dependencies
 and the single browser used by both test suites:
@@ -74,8 +78,9 @@ On failure, screenshots, traces, and an HTML report are written under
 `npx playwright show-report output/playwright/report`. GitHub retains failure
 diagnostics for seven days.
 
-The `CI` workflow runs `Validate app` on PRs targeting `master`, pushes to `master`,
-and manual runs. New PR commits replace superseded runs. The repository's active
+The `PR checks` workflow runs required check `Validate app` on PRs targeting
+`master`, including documentation changes and drafts, and explicit recovery runs.
+`App release` validates and deploys only production-relevant master pushes. New PR commits replace superseded runs. The repository's active
 `master` ruleset requires this GitHub Actions check to pass against the current
 base branch, requires a PR, blocks force pushes and deletion, and has no bypass
 actors or required human approvals. These repository settings are managed in
