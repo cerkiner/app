@@ -1,5 +1,6 @@
 import { existsSync, rmSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, TASK_WORKFLOW, gh, pages, command, json, save,
   output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment,
   publicText, authoredTitle, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
@@ -553,10 +554,14 @@ async function publish(reviewOnly) {
     throw error;
   }
   if (confirmedIssue && repairedBody !== repairPr.body) {
-    const current = prFor(task.repo, task.number);
+    let current = prFor(task.repo, task.number);
+    for (let attempt = 0; attempt < 10 && current.state === 'open' && current.head.sha === task.head_sha && current.body === repairPr.body; attempt++) {
+      await delay(1000);
+      current = prFor(task.repo, task.number);
+    }
     if (current.state === 'open' && current.head.sha === commit && current.body === repairPr.body) {
       gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
-    }
+    } else console.log('The confirmed issue reference was left unchanged because the PR head or body could not be verified.');
   }
   if (task.mode === 'repair') reviewStatus({ ...task, head_sha: commit }, 'pending', 'Waiting for validation and independent review of this revision.');
   let prNumber = task.number;
