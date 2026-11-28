@@ -253,9 +253,7 @@ async function prepare(kind) {
       const issueNumber = managedIssuePublication(repo, pr)?.number;
       if (issueNumber) {
         const sourceIssue = gh(`repos/${repo}/issues/${issueNumber}`);
-        if (sourceIssue.state === 'open') {
-          task.context.closing_issue = { number: sourceIssue.number, title: bounded(sourceIssue.title, 500), body: bounded(sourceIssue.body, 16000) };
-        }
+        task.context.closing_issue = { number: sourceIssue.number, title: bounded(sourceIssue.title, 500), body: bounded(sourceIssue.body, 16000) };
       }
       const branchInfo = gh(`repos/${repo}/branches/${encodeURIComponent(task.branch)}`);
       if (task.branch === metadata.default_branch || branchInfo.protected) { notice(task, 'Automatic repair will not push to a protected or default branch.', 'repair-policy'); return; }
@@ -470,7 +468,7 @@ function recoverPushedIssue(task, issue, publication) {
   if (ref.object.sha !== sha(publication.output_sha)) throw new Error('The existing issue branch does not match its accepted publication');
   const originalTask = { ...task, run_id: publication.run_id };
   return gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
-    head: task.branch, base: task.default_branch, title: authoredTitle(publication.pr_title || issue.title),
+    head: task.branch, base: task.default_branch, title: withoutClosingKeywords(authoredTitle(publication.pr_title || issue.title)),
     body: issuePullRequestBody(originalTask, null, publication.output_sha, publication.summary), draft: false,
   } });
 }
@@ -544,14 +542,12 @@ export async function publishReviewedStatus(task, pr, state, description) {
     const origin = managedIssuePublication(task.repo, pr);
     if (origin) {
       const issue = gh(`repos/${task.repo}/issues/${origin.number}`);
-      if (issue.state === 'open') {
-        const repair = records(commentsFor(task.repo, pr.number)).findLast(record => record.kind === 'repair' &&
-          record.output_sha === task.head_sha && typeof record.closes_issue === 'boolean');
-        // Publication intent belongs to its exact patch. A newer unconfirmed
-        // revision must not inherit permission to close the issue.
-        const closes = repair?.closes_issue ?? (origin.record.output_sha === task.head_sha && origin.record.closes_issue === true);
-        await syncClosingIssue(pr, issue, task.head_sha, closes);
-      }
+      const repair = records(commentsFor(task.repo, pr.number)).findLast(record => record.kind === 'repair' &&
+        record.output_sha === task.head_sha && typeof record.closes_issue === 'boolean');
+      // Publication intent belongs to its exact patch. A newer unconfirmed
+      // revision must not inherit permission to close the issue.
+      const closes = repair?.closes_issue ?? (origin.record.output_sha === task.head_sha && origin.record.closes_issue === true);
+      await syncClosingIssue(pr, issue, task.head_sha, closes);
     }
   }
   reviewStatus(task, state, description);
@@ -633,7 +629,7 @@ async function publish(reviewOnly) {
   if (['issue', 'deployment'].includes(task.mode)) {
     const issue = gh(`repos/${task.repo}/issues/${task.number}`);
     const pr = gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
-      head: task.branch, base: task.default_branch, title: authoredTitle(result.title || issue.title),
+      head: task.branch, base: task.default_branch, title: withoutClosingKeywords(authoredTitle(result.title || issue.title)),
       body: issuePullRequestBody(task, result, commit),
       draft: false,
     } });
