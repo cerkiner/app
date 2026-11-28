@@ -52,7 +52,10 @@ The active `master` ruleset requires both **Validate app** and **Independent
 review** from GitHub Actions. Keep both required when enabling automated issue
 closure. The review worker verifies the native closing link for the exact PR
 revision before marking its check successful. GitHub closes the issue when a
-complete fix merges. Partial fixes leave it open. COMMENT
+complete fix merges. Partial fixes leave it open. A maintainer can override the
+closing decision by explicitly changing the native link after review. GitHub
+treats that link as PR metadata while the required code check applies to the
+commit. COMMENT
 reviews and repair explanations remain on the PR; automation never approves or
 merges it. No new credentials or manual control forms are needed.
 

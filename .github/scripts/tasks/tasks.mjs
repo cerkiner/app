@@ -380,6 +380,10 @@ function gitContext(task, root = ROOT, work = WORK) {
   const args = ['--git-dir', path.join(root, '.git'), '--work-tree', path.join(work, 'workspace'), '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null'];
   return (parameters, options = {}) => command('git', [...args, ...parameters], { cwd: path.join(work, 'workspace'), env, ...options });
 }
+export function withoutClosingKeywords(value) {
+  return value.replace(/\b(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s*:?\s+((?:[\w.-]+\/[\w.-]+)?#\d+|https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+)/gi,
+    '$1 ($2)');
+}
 export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   const git = gitContext(task, root, work);
   git(['read-tree', task.head_sha]);
@@ -401,8 +405,9 @@ export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   if (Buffer.byteLength(diff) > 1024 * 1024) throw new Error('Patch exceeds 1 MiB limit');
   if (redactor()(diff) !== diff) throw new Error('Potential credential material found in patch; publishing blocked');
   const tree = git(['write-tree']).trim();
-  const subject = authoredTitle(result.title) || `Address ${task.mode} #${task.number}`;
-  const message = `${subject}\n\n${bounded(result.summary, 1800)}\n\nRefs #${task.number}\nRepository-Task: ${task.mode}\n${task.budget ? `Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
+  const subject = withoutClosingKeywords(authoredTitle(result.title)) || `Address ${task.mode} #${task.number}`;
+  const summary = withoutClosingKeywords(bounded(result.summary, 1800));
+  const message = `${subject}\n\n${summary}\n\nRefs #${task.number}\nRepository-Task: ${task.mode}\n${task.budget ? `Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
   return git(['-c', 'commit.gpgsign=false', 'commit-tree', tree, '-p', task.head_sha], { input: message }).trim();
 }
 export function pushArguments(task, commit, remote = `https://github.com/${task.repo}.git`) {
