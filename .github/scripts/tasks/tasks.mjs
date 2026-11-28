@@ -10,6 +10,8 @@ import { repairBudget, humanRevisionAuthor, failureSignature, changedLines, cano
 import { documentationPath } from './validation.mjs';
 
 const taskFile = path.join(WORK, 'task.json');
+const issueReferenceStart = '<!-- issue-reference-start -->';
+const issueReferenceEnd = '<!-- issue-reference-end -->';
 const commentsFor = (repo, n) => pages(`repos/${repo}/issues/${n}/comments?per_page=100`);
 const prFor = (repo, n) => gh(`repos/${repo}/pulls/${integer(n)}`);
 const runUrl = task => `https://github.com/${task.repo}/actions/runs/${task.run_id}`;
@@ -448,19 +450,26 @@ export function issuePullRequestBody(task, result, commit) {
   const reference = closesIssue ? 'Closes' : 'Refs';
   const origin = marker({ kind: 'origin', issue, branch: task.branch, initial_sha: commit, run_id: task.run_id, ...(task.mode === 'issue' ? { issue_task: true } : {}) });
   const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance });
-  return `${origin}\n${reference} #${issue}\n\n${description}`;
+  const link = `${reference} #${issue}`;
+  const issueReference = task.mode === 'issue' ? `${issueReferenceStart}\n\n${link}\n\n${issueReferenceEnd}` : link;
+  return `${origin}\n${issueReference}\n\n${description}`;
 }
 export function managedIssueReference(pr) {
   const origin = recordFrom(pr);
   if (origin?.kind !== 'origin' || origin.issue_task !== true || !Number.isSafeInteger(origin.issue) || origin.issue < 1) return null;
+  const start = pr.body.indexOf(issueReferenceStart);
+  const end = pr.body.indexOf(issueReferenceEnd, start + issueReferenceStart.length);
+  if (start < 0 || end < 0) return null;
+  const contentStart = start + issueReferenceStart.length;
+  const content = pr.body.slice(contentStart, end);
   const repositoryName = pr.base?.repo?.full_name?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const prefix = repositoryName ? `(?:${repositoryName})?` : '';
   const pattern = new RegExp(`(?<![\\w/])(refs|close[sd]?|fix(?:es|ed)?|resolve[sd]?)[ \\t]*:?[ \\t]+${prefix}#${origin.issue}(?![\\w])`, 'gi');
-  const matches = [...pr.body.matchAll(pattern)];
+  const matches = [...content.matchAll(pattern)];
   if (matches.length > 1) throw new Error('The originating issue has multiple managed references');
   if (!matches.length) return null;
   const [match, keyword] = matches[0];
-  return { number: origin.issue, closes: keyword.toLowerCase() !== 'refs', start: matches[0].index, length: match.length };
+  return { number: origin.issue, closes: keyword.toLowerCase() !== 'refs', start: contentStart + matches[0].index, length: match.length };
 }
 export function repairPullRequestBody(pr, confirmedIssue) {
   const reference = managedIssueReference(pr);
@@ -535,16 +544,19 @@ async function publish(reviewOnly) {
     'The focused change is ready for safe publication.', { result, next: 'Publish the verified change.' }), task.comment_id);
   save(taskFile, task);
   const repairEndpoint = `repos/${task.repo}/pulls/${task.number}`;
-  const downgrade = repairPr && !confirmedIssue && repairedBody !== repairPr.body;
   // Remove stale closure before publishing an unconfirmed patch. A newly
   // confirmed closure can be added only after the confirming commit is live.
-  if (downgrade) {
+  const previousReference = repairPr && managedIssueReference(repairPr);
+  if (previousReference) {
     const current = prFor(task.repo, task.number);
-    if (current.state !== 'open' || current.head.sha !== task.head_sha || current.body !== repairPr.body) {
-      throw new Error('PR head or body changed before updating the issue reference');
+    if (current.state !== 'open' || current.head.sha !== task.head_sha || managedIssueReference(current)?.number !== previousReference.number) {
+      throw new Error('PR head or managed issue reference changed during repair');
     }
-    gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
+    repairPr = current;
+    repairedBody = repairPullRequestBody(current, confirmedIssue);
   }
+  const downgrade = repairPr && !confirmedIssue && repairedBody !== repairPr.body;
+  if (downgrade) gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
   try {
     command('git', pushArguments(task, commit), { cwd: ROOT });
   } catch (error) {
