@@ -474,8 +474,15 @@ function managedIssuePublication(repo, pr, history) {
   const match = /^issue-([1-9]\d{0,14})$/.exec(pr.head.ref);
   if (!match) return null;
   const number = integer(match[1]);
-  const record = (history || records(commentsFor(repo, number))).findLast(entry => entry.kind === 'issue' &&
-    entry.manages_issue_link === true && (entry.pr === pr.number || (!entry.pr && entry.output_sha === pr.head.sha)));
+  const accepted = (history || records(commentsFor(repo, number))).filter(entry => entry.kind === 'issue' && entry.manages_issue_link === true);
+  const origin = recordFrom(pr);
+  const validOrigin = origin?.kind === 'origin' && origin.issue === number && origin.branch === pr.head.ref;
+  let record = accepted.findLast(entry => entry.pr === pr.number || (!entry.pr &&
+    (entry.output_sha === pr.head.sha || (validOrigin && origin.run_id === entry.run_id && origin.initial_sha === entry.output_sha))));
+  if (!record && accepted.some(entry => !entry.pr)) {
+    const commits = new Set(pages(`repos/${repo}/pulls/${pr.number}/commits?per_page=100`).map(commit => commit.sha));
+    record = accepted.findLast(entry => !entry.pr && commits.has(entry.output_sha));
+  }
   return record ? { number, record } : null;
 }
 function graph(query, variables) {
