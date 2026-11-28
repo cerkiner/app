@@ -128,11 +128,21 @@ export function validateResult(result, mode) {
   for (const test of result.tests) {
     if (typeof test.command !== 'string' || !['passed', 'failed', 'not_run'].includes(test.status) || typeof test.details !== 'string') throw new Error('Invalid test result');
   }
-  for (const finding of result.findings) {
-    if (!safeFile(finding.path) || !Number.isSafeInteger(finding.line) || finding.line < 1 ||
-        !['P0', 'P1', 'P2', 'P3'].includes(finding.priority) || typeof finding.actionable !== 'boolean' ||
-        !(finding.previous_key === null || /^[a-f0-9]{20}$/.test(finding.previous_key)) ||
-        (finding.priority === 'P3' && finding.actionable) || typeof finding.title !== 'string' || finding.title.length > 240 || typeof finding.body !== 'string' || finding.body.length > 2400) throw new Error('Invalid review finding');
+  for (const [index, finding] of result.findings.entries()) {
+    const error = `Invalid review finding ${index + 1}`;
+    if (!finding || typeof finding !== 'object') throw new Error(`${error}: expected an object`);
+    if (!safeFile(finding.path)) throw new Error(`${error}: path must be a safe repository-relative file path`);
+    if (!Number.isSafeInteger(finding.line) || finding.line < 1) throw new Error(`${error}: line must be a positive integer`);
+    if (!['P0', 'P1', 'P2', 'P3'].includes(finding.priority)) throw new Error(`${error}: priority must be P0, P1, P2 or P3`);
+    if (typeof finding.actionable !== 'boolean' || (finding.priority === 'P3' && finding.actionable)) {
+      throw new Error(`${error}: actionable must be a boolean and must be false for P3`);
+    }
+    const key = finding.previous_key;
+    if (key !== null && (typeof key !== 'string' || !/^[a-f0-9]{20}$/.test(key))) {
+      throw new Error(`${error}: previous_key must be null or a 20-character lowercase hexadecimal key`);
+    }
+    if (typeof finding.title !== 'string' || finding.title.length > 240) throw new Error(`${error}: title must be a string of at most 240 characters`);
+    if (typeof finding.body !== 'string' || finding.body.length > 2400) throw new Error(`${error}: body must be a string of at most 2400 characters`);
   }
   const verified = new Set();
   for (const item of result.finding_verifications) {
