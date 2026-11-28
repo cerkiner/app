@@ -44,10 +44,12 @@ describe('AppComponent', () => {
     expect(fixture.nativeElement.querySelectorAll('ion-menu').length).toBe(2);
   });
 
-  it('should render the correct professional link titles', () => {
+  it('should render the correct professional link titles', async () => {
     const app: HTMLElement = fixture.nativeElement;
-    const titles = Array.from(app.querySelectorAll('ion-menu[side="end"] ion-label'),
-      label => label.textContent?.trim());
+    const labels = Array.from(app.querySelectorAll<HTMLIonLabelElement>('ion-menu[side="end"] ion-label'));
+    // Ionic exposes slotted text through textContent after the labels render.
+    await Promise.all(labels.map(label => label.componentOnReady()));
+    const titles = labels.map(label => label.textContent?.trim());
     expect(titles).toContain('LinkedIn');
     expect(titles).toContain('GitHub');
   });
