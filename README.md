@@ -41,11 +41,15 @@ The hosting document root is shared with WordPress, the blog and the API. Use ta
 Issue implementation, independent PR review and bounded CI repair use separate
 fresh sessions in purpose-specific workflows. See [the automation guide](.github/AUTOMATION.md)
 for subscription login setup, native permissions, recovery and tests. PR checks
-run first; their follow-up repairs failures or reviews passing revisions and fixes
-confirmed findings. Documentation is reviewed for coherence as well.
+run first; a separate job starts the existing follow-up to repair failures or
+review passing revisions and fix confirmed findings. Issue and recovery PRs open
+without draft status. Automatic processing covers repository branches; fork reviews are manual.
 
 When GitHub requires it, select **Approve workflows to run** on the PR page to
 start checks. This authorizes CI execution, not code acceptance or merging.
+Independent review stays pending during review or repair and turns green only
+after a complete review with no unresolved material findings. An incomplete
+review fails its run and cannot be treated as passed.
 
 Use Node 24 from `.nvmrc` (`nvm install && nvm use`). Install the locked dependencies
 and the single browser used by both test suites:
@@ -78,11 +82,12 @@ On failure, screenshots, traces, and an HTML report are written under
 `npx playwright show-report output/playwright/report`. GitHub retains failure
 diagnostics for seven days.
 
-The `PR checks` workflow runs required check `Validate app` on PRs targeting
-`master`, including documentation changes and drafts, and explicit recovery runs.
+The `PR checks` workflow runs `Validate app` on PRs targeting `master`, including
+documentation changes, and supports explicit diagnostic recovery runs.
 `App release` validates and deploys only production-relevant master pushes. New PR commits replace superseded runs. The repository's active
-`master` ruleset requires this GitHub Actions check to pass against the current
-base branch, requires a PR, blocks force pushes and deletion, and has no bypass
+`master` ruleset requires Validate app to pass against the current base branch.
+After the new review status is verified live, add Independent review to the same
+required checks. The ruleset requires a PR, blocks force pushes and deletion, and has no bypass
 actors or required human approvals. These repository settings are managed in
 GitHub, separately from this workflow. Green means the defined checks passed;
 it does not cover other browser engines, native builds, or the WordPress theme.

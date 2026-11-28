@@ -12,6 +12,18 @@ const taskFile = path.join(WORK, 'task.json');
 const commentsFor = (repo, n) => pages(`repos/${repo}/issues/${n}/comments?per_page=100`);
 const prFor = (repo, n) => gh(`repos/${repo}/pulls/${integer(n)}`);
 const runUrl = task => `https://github.com/${task.repo}/actions/runs/${task.run_id}`;
+function reviewStatus(task, state, description) {
+  gh(`repos/${task.repo}/statuses/${sha(task.head_sha)}`, { method: 'POST', body: {
+    context: 'Independent review', state, description, target_url: runUrl(task),
+  } });
+}
+function reviewPasses(task, review, verifications = []) {
+  const record = publishedReview(review, task.head_sha);
+  const previous = (task.history || []).filter(r => r.kind === 'repair' && r.status === 'complete' &&
+    r.input_sha === task.head_sha && r.review_ids?.includes(review.id)).flatMap(r => r.finding_verifications || []);
+  const cleared = new Set([...previous, ...verifications].filter(v => ['incorrect', 'already_resolved'].includes(v.status)).map(v => v.finding_key));
+  return record?.review_status === 'complete' && record.findings.every(f => f.priority === 'P3' || cleared.has(f.key));
+}
 function canWrite(repo, actor) {
   if (!actor) return false;
   try {
@@ -69,6 +81,7 @@ function notice(task, text, kind = 'notice', extra = '') {
     comment(task.repo, task.number, { kind, head_sha: task.head_sha, message: text, run_id: task.run_id },
       message(task, stage, text, { next: 'Review the explanation and provide the missing information or access.', extra }));
   }
+  if (['review', 'repair'].includes(task.mode)) reviewStatus(task, 'failure', 'Review or repair is blocked; see the explanation.');
   output('proceed', 'false');
 }
 async function associatedPRs(repo, run) {
@@ -82,10 +95,14 @@ async function associatedPRs(repo, run) {
   return result;
 }
 function verifyRun(run, repo, workflow, name) {
-  if (run.repository?.full_name !== repo || run.path !== `.github/workflows/${workflow}` || run.status !== 'completed') throw new Error('Workflow run provenance does not match the configured workflow');
+  if (run.repository?.full_name !== repo || run.path !== `.github/workflows/${workflow}` || !['in_progress', 'completed'].includes(run.status)) throw new Error('Workflow run provenance does not match the configured workflow');
   const definition = gh(`repos/${repo}/actions/workflows/${workflow}`);
   if (definition.id !== run.workflow_id || definition.path !== run.path || definition.name !== name) throw new Error('Workflow identity does not match the accepted task flow');
   sha(run.head_sha);
+  const jobs = pages(`repos/${repo}/actions/runs/${run.id}/attempts/${integer(run.run_attempt)}/jobs?per_page=100`).flatMap(p => p.jobs || []);
+  const validation = jobs.filter(job => job.name === 'Validate app');
+  if (validation.length !== 1 || !['success', 'failure', 'timed_out'].includes(validation[0].conclusion)) throw new Error('The exact validation job has not finished.');
+  return validation[0].conclusion;
 }
 
 function recordReviewFindings(request) {
@@ -127,7 +144,7 @@ async function prepare(kind) {
     if (!task.requested_findings.length) return;
   } else if (process.env.TASK_CHECKS_RUN_ID) {
     ci = gh(`repos/${repo}/actions/runs/${integer(process.env.TASK_CHECKS_RUN_ID)}`);
-    verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
+    ci.conclusion = verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
     if (!['pull_request', 'workflow_dispatch'].includes(ci.event)) return;
     if (kind === 'review' ? ci.conclusion !== 'success' : !['failure', 'timed_out'].includes(ci.conclusion)) return;
     if (kind === 'ci-repair' && ci.head_repository?.full_name !== repo) return;
@@ -180,6 +197,7 @@ async function prepare(kind) {
       const existingReview = reviews.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
       if (existingReview) {
         const record = publishedReview(existingReview, task.head_sha);
+        reviewStatus(task, reviewPasses(task, existingReview) ? 'success' : 'failure', 'Existing independent review and verified resolutions apply to this revision.');
         task.skip_reason = 'This revision already has a completed independent review.';
         save(taskFile, task);
         if (actionableFindings(record.findings).length) recordReviewFindings({ target: pr.number, head: task.head_sha, source: 'review', review_id: existingReview.id });
@@ -199,7 +217,8 @@ async function prepare(kind) {
     });
     let remaining = 22000;
     task.context.pr = { number: pr.number, title: bounded(pr.title, 500), body: bounded(pr.body, 5000), author: pr.user.login,
-      base_sha: pr.base.sha, linked_issues: linkedIssues, diff_is_partial: files.length > 40 || files.some(f => !f.patch),
+      base_sha: pr.base.sha, comparison_sha: sha(gh(`repos/${repo}/compare/${sha(pr.base.sha)}...${task.head_sha}`).merge_base_commit?.sha),
+      linked_issues: linkedIssues, diff_is_partial: files.length > 40 || files.some(f => !f.patch),
       files: files.slice(0, 40).map(f => { const patch = bounded(f.patch, Math.max(0, Math.min(3000, remaining))); remaining -= patch.length; return { filename: f.filename, status: f.status, patch }; }),
       commits: commits.slice(-8).map(c => ({ sha: c.sha, message: bounded(c.commit.message, 400) })),
       previous_structured_findings: task.previous_structured_findings,
@@ -232,7 +251,10 @@ async function prepare(kind) {
         const candidates = gh(`repos/${repo}/actions/workflows/${CI_WORKFLOW}/runs?head_sha=${task.head_sha}&status=failure&per_page=10`).workflow_runs || [];
         ci = candidates.find(run => run.head_sha === task.head_sha && run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === `.github/workflows/${CI_WORKFLOW}` && run.status === 'completed' && run.conclusion === 'failure');
       }
-      if (ci) verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
+      if (ci) {
+        ci.conclusion = verifyRun(ci, repo, CI_WORKFLOW, 'PR checks');
+        if (ci.conclusion === 'success') ci = null;
+      }
       let failed = [];
       if (ci) {
         const jobs = pages(`repos/${repo}/actions/runs/${ci.id}/attempts/${ci.run_attempt}/jobs?per_page=100`).flatMap(p => p.jobs || []);
@@ -273,6 +295,8 @@ async function prepare(kind) {
   const fetchRef = pr && !sameRepository(pr, repo) ? `refs/pull/${integer(pr.number)}/head` : task.head_sha;
   command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1', `https://github.com/${repo}.git`, fetchRef], { cwd: ROOT });
   if (fetchRef !== task.head_sha && command('git', ['rev-parse', 'FETCH_HEAD'], { cwd: ROOT }).trim() !== task.head_sha) throw new Error('PR head changed during fetch; this review request is stale');
+  if (pr) command('git', ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential', 'fetch', '--no-tags', '--depth=1',
+    `https://github.com/${repo}.git`, task.context.pr.comparison_sha], { cwd: ROOT });
   rmSync(path.join(ARTIFACTS, 'result.json'), { force: true });
   rmSync(path.join(ARTIFACTS, 'error.json'), { force: true });
   save(taskFile, task);
@@ -290,6 +314,7 @@ function recheck() {
 }
 function reserve() {
   const task = json(taskFile);
+  if (['review', 'repair'].includes(task.mode)) reviewStatus(task, 'pending', 'Independent review or bounded repair is running.');
   if (task.mode === 'review') return;
   const record = task.mode === 'repair' ? {
     kind: 'repair', source: task.repair_source, status: 'reserved', cycle: task.budget.cycle, attempt: task.budget.attempt,
@@ -360,13 +385,9 @@ async function publishReview(task, result) {
   const existing = prior.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
   if (existing) {
     const record = publishedReview(existing, task.head_sha);
+    reviewStatus(task, reviewPasses(task, existing) ? 'success' : 'failure', 'Existing independent review and verified resolutions apply to this revision.');
     if (record && actionableFindings(record.findings).length) recordReviewFindings({ target: task.number, head: task.head_sha, source: 'review', review_id: existing.id });
     return;
-  }
-  if (task.context.pr.diff_is_partial) {
-    result.review_status = 'incomplete';
-    result.unresolved.push('The supplied diff was partial; complete PR coverage could not be established.');
-    save(path.join(ARTIFACTS, 'result.json'), result);
   }
   const findings = canonicalFindings(result.findings, task.previous_structured_findings || []);
   const significant = findings.filter(f => f.priority !== 'P3');
@@ -390,6 +411,13 @@ async function publishReview(task, result) {
     commit_id: task.head_sha, event: 'COMMENT', body,
     comments: inline.map(f => ({ path: f.path, line: f.line, side: 'RIGHT', body: renderFinding(f) })),
   } });
+  const state = result.review_status === 'incomplete' ? 'failure' : needsRepair ? 'pending' : reviewPasses(task, created) ? 'success' : 'failure';
+  reviewStatus(task, state, {
+    pending: 'Review findings are entering bounded repair.',
+    success: 'Independent review completed with no unresolved material findings.',
+    failure: 'Independent review is incomplete or has unresolved material findings.',
+  }[state]);
+  if (result.review_status === 'incomplete') throw new Error('Independent review incomplete: ' + bounded(result.unresolved[0], 1200));
   if (needsRepair) recordReviewFindings({ target: task.number, head: task.head_sha, review_id: integer(created.id) });
 }
 async function publish(reviewOnly) {
@@ -424,6 +452,10 @@ async function publish(reviewOnly) {
     comment(task.repo, task.number, { ...task.record, status, outcome: result.outcome, summary: bounded(result.summary, 1500) },
       message(task, task.mode === 'repair' ? 'repair_human' : 'issue_findings', result.summary, { result,
         next: disputed ? 'Review the explanation. This finding will not be retried in this cycle.' : task.mode === 'repair' ? 'Resolve the reported blocker before retrying.' : 'Follow the findings or provide the requested information.' }), task.comment_id);
+    if (task.mode === 'repair') {
+      const review = task.review_id && gh(`repos/${task.repo}/pulls/${task.number}/reviews/${task.review_id}`);
+      reviewStatus(task, review && reviewPasses(task, review, result.finding_verifications) ? 'success' : 'failure', 'Repair finished without a code change; see the verified findings and blockers.');
+    }
     return;
   }
   if (['issue', 'deployment'].includes(task.mode) && gh(`repos/${task.repo}/issues/${task.number}`).state !== 'open') {
@@ -448,6 +480,7 @@ async function publish(reviewOnly) {
     'The focused change is ready for safe publication.', { result, next: 'Publish the verified change.' }), task.comment_id);
   save(taskFile, task);
   command('git', pushArguments(task, commit), { cwd: ROOT });
+  if (task.mode === 'repair') reviewStatus({ ...task, head_sha: commit }, 'pending', 'Waiting for validation and independent review of this revision.');
   let prNumber = task.number;
   if (['issue', 'deployment'].includes(task.mode)) {
     const issue = gh(`repos/${task.repo}/issues/${task.number}`);
@@ -455,7 +488,7 @@ async function publish(reviewOnly) {
     const pr = gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
       head: task.branch, base: task.default_branch, title: authoredTitle(result.title || issue.title),
       body: marker({ kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id }) + '\n' + description,
-      draft: result.tests.some(t => t.status === 'failed') || !result.tests.some(t => t.status === 'passed'),
+      draft: false,
     } });
     prNumber = pr.number;
     comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) },
@@ -472,6 +505,7 @@ async function reportFailure() {
   const task = json(taskFile);
   const errorFile = path.join(ARTIFACTS, 'error.json');
   const reason = existsSync(errorFile) ? json(errorFile).message : 'Execution or publication could not finish. Human input is required.';
+  if (['review', 'repair'].includes(task.mode)) reviewStatus(task, 'error', 'Review or repair could not finish; see the failed run.');
   const stage = task.mode === 'review' ? 'review_incomplete' : task.mode === 'repair' ? 'repair_human' : 'issue_findings';
   const body = message(task, stage, reason, { next: 'Inspect the technical details and resolve the blocker.',
     extra: 'Check authentication, credential persistence, exact head SHA, repository permissions and publication steps.' });

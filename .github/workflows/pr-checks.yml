@@ -4,7 +4,7 @@ run-name: "PR checks · #${{ github.event.pull_request.number || inputs.pr_numbe
 on:
   pull_request:
     branches: [master]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -77,3 +77,29 @@ jobs:
           path: output/playwright/
           if-no-files-found: ignore
           retention-days: 7
+
+  follow_up:
+    name: Start review or repair
+    needs: validate
+    if: always() && contains(fromJSON('["success", "failure"]'), needs.validate.result) && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      statuses: write
+    steps:
+      - name: Start the existing trusted follow-up workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          TASK: ${{ needs.validate.result == 'success' && 'review' || 'ci-repair' }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.expected_head_sha }}
+        run: |
+          gh api "repos/$GH_REPO/statuses/$EXPECTED_SHA" --method POST \
+            -f state=pending -f context='Independent review' -f description='Validation finished; review or repair is queued.' \
+            -f target_url="$GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID"
+          gh workflow run pr-follow-up.yml --repo "$GH_REPO" --ref "$DEFAULT_BRANCH" \
+            -f task="$TASK" -f pr_number="$PR_NUMBER" \
+            -f expected_head_sha="$EXPECTED_SHA" -f checks_run_id="$GITHUB_RUN_ID"
