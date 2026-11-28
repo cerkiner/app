@@ -239,11 +239,11 @@ async function prepare(kind) {
         jobs: jobs.map(job => ({ name: job.name, conclusion: job.conclusion, steps: (job.steps || []).map(step => ({ name: step.name, conclusion: step.conclusion })) })) };
     }
     if (task.mode === 'repair') {
-      const closingIssue = generatedClosingIssue(pr);
-      if (closingIssue) {
-        const sourceIssue = gh(`repos/${repo}/issues/${closingIssue}`);
+      const issueReference = managedIssueReference(pr);
+      if (issueReference) {
+        const sourceIssue = gh(`repos/${repo}/issues/${issueReference.number}`);
         if (sourceIssue.state === 'open') {
-          task.context.closing_issue = { number: closingIssue, title: bounded(sourceIssue.title, 500), body: bounded(sourceIssue.body, 16000) };
+          task.context.closing_issue = { number: sourceIssue.number, title: bounded(sourceIssue.title, 500), body: bounded(sourceIssue.body, 16000) };
         }
       }
       const branchInfo = gh(`repos/${repo}/branches/${encodeURIComponent(task.branch)}`);
@@ -445,20 +445,24 @@ export function issuePullRequestBody(task, result, commit) {
   const issue = integer(task.number);
   const closesIssue = task.mode === 'issue' && result.outcome === 'issue_resolved';
   const reference = closesIssue ? 'Closes' : 'Refs';
-  const origin = marker({ kind: 'origin', issue, branch: task.branch, initial_sha: commit, run_id: task.run_id, ...(closesIssue ? { closes_issue: true } : {}) });
+  const origin = marker({ kind: 'origin', issue, branch: task.branch, initial_sha: commit, run_id: task.run_id, ...(task.mode === 'issue' ? { issue_task: true } : {}) });
   const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance });
   return `${origin}\n${reference} #${issue}\n\n${description}`;
 }
-export function generatedClosingIssue(pr) {
-  const [record, reference, separator] = (pr.body || '').split(/\r?\n/, 3);
-  const origin = recordFrom({ ...pr, body: record });
-  if (origin?.kind !== 'origin' || origin.closes_issue !== true || !Number.isSafeInteger(origin.issue) || origin.issue < 1) return null;
-  return record.startsWith('<!--') && reference === `Closes #${origin.issue}` && separator === '' ? origin.issue : null;
+export function managedIssueReference(pr) {
+  const origin = recordFrom(pr);
+  if (origin?.kind !== 'origin' || origin.issue_task !== true || !Number.isSafeInteger(origin.issue) || origin.issue < 1) return null;
+  const pattern = new RegExp(`^([ \\t]{0,3})(refs|close[sd]?|fix(?:es|ed)?|resolve[sd]?)([ \\t]*:?[ \\t]+#${origin.issue}[ \\t]*)(?=\\r?$)`, 'gim');
+  const matches = [...pr.body.matchAll(pattern)];
+  if (matches.length > 1) throw new Error('The originating issue has multiple managed reference lines');
+  if (!matches.length) return null;
+  return { number: origin.issue, closes: matches[0][2].toLowerCase() !== 'refs', pattern };
 }
 export function repairPullRequestBody(pr, confirmedIssue) {
-  const closingIssue = generatedClosingIssue(pr);
-  if (!closingIssue || closingIssue === confirmedIssue) return pr.body;
-  return pr.body.replace(/^(<!--[^\r\n]+-->\r?\n)Closes /, '$1Refs ');
+  const reference = managedIssueReference(pr);
+  if (!reference || reference.closes === (reference.number === confirmedIssue)) return pr.body;
+  const keyword = reference.number === confirmedIssue ? 'Closes' : 'Refs';
+  return pr.body.replace(reference.pattern, (_, padding) => `${padding}${keyword} #${reference.number}`);
 }
 async function publish(reviewOnly) {
   const task = json(taskFile);
@@ -506,15 +510,16 @@ async function publish(reviewOnly) {
   const commit = buildCommit(task, result);
   if (!commit) throw new Error('Codex reported changes but the validated patch was empty');
   sha(commit);
+  let repairPr, repairedBody, confirmedIssue;
   if (task.mode === 'repair') {
     const pr = prFor(task.repo, task.number), info = gh(`repos/${task.repo}/branches/${encodeURIComponent(task.branch)}`);
     if (pr.state !== 'open' || !sameRepository(pr, task.repo) || pr.head.sha !== task.head_sha || pr.head.ref !== task.branch || info.protected || task.branch === task.default_branch) throw new Error('PR head or branch protection changed; stale changes will not be pushed');
-    const confirmedIssue = result.outcome === 'issue_resolved' ? task.context.closing_issue?.number : undefined;
-    if (result.outcome === 'issue_resolved' && (!confirmedIssue || generatedClosingIssue(pr) !== confirmedIssue)) {
-      throw new Error('Issue resolution was reported without a matching generated closing link');
+    confirmedIssue = result.outcome === 'issue_resolved' ? task.context.closing_issue?.number : undefined;
+    if (result.outcome === 'issue_resolved' && (!confirmedIssue || managedIssueReference(pr)?.number !== confirmedIssue)) {
+      throw new Error('Issue resolution was reported without a matching managed issue reference');
     }
-    const body = repairPullRequestBody(pr, confirmedIssue);
-    if (body !== pr.body) gh(`repos/${task.repo}/pulls/${pr.number}`, { method: 'PATCH', body: { body } });
+    repairPr = pr;
+    repairedBody = repairPullRequestBody(pr, confirmedIssue);
   } else {
     const remote = command('git', ['ls-remote', `https://github.com/${task.repo}.git`, `refs/heads/${task.branch}`], {
       env: cleanEnvironment({ GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' }),
@@ -525,7 +530,34 @@ async function publish(reviewOnly) {
   comment(task.repo, task.number, task.record, message(task, task.mode === 'repair' ? task.repair_source === 'review' ? 'repair_review' : 'repair_ci' : 'issue_investigating',
     'The focused change is ready for safe publication.', { result, next: 'Publish the verified change.' }), task.comment_id);
   save(taskFile, task);
-  command('git', pushArguments(task, commit), { cwd: ROOT });
+  const repairEndpoint = `repos/${task.repo}/pulls/${task.number}`;
+  const downgrade = repairPr && !confirmedIssue && repairedBody !== repairPr.body;
+  // Remove stale closure before publishing an unconfirmed patch. A newly
+  // confirmed closure can be added only after the confirming commit is live.
+  if (downgrade) {
+    const current = prFor(task.repo, task.number);
+    if (current.state !== 'open' || current.head.sha !== task.head_sha || current.body !== repairPr.body) {
+      throw new Error('PR head or body changed before updating the issue reference');
+    }
+    gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
+  }
+  try {
+    command('git', pushArguments(task, commit), { cwd: ROOT });
+  } catch (error) {
+    if (downgrade) {
+      const current = prFor(task.repo, task.number);
+      if (current.state === 'open' && current.head.sha === task.head_sha && current.body === repairedBody) {
+        gh(repairEndpoint, { method: 'PATCH', body: { body: repairPr.body } });
+      }
+    }
+    throw error;
+  }
+  if (confirmedIssue && repairedBody !== repairPr.body) {
+    const current = prFor(task.repo, task.number);
+    if (current.state === 'open' && current.head.sha === commit && current.body === repairPr.body) {
+      gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
+    }
+  }
   if (task.mode === 'repair') reviewStatus({ ...task, head_sha: commit }, 'pending', 'Waiting for validation and independent review of this revision.');
   let prNumber = task.number;
   if (['issue', 'deployment'].includes(task.mode)) {
