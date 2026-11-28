@@ -10,8 +10,6 @@ import { repairBudget, humanRevisionAuthor, failureSignature, changedLines, cano
 import { documentationPath } from './validation.mjs';
 
 const taskFile = path.join(WORK, 'task.json');
-const issueReferenceStart = '<!-- issue-reference-start -->';
-const issueReferenceEnd = '<!-- issue-reference-end -->';
 const commentsFor = (repo, n) => pages(`repos/${repo}/issues/${n}/comments?per_page=100`);
 const prFor = (repo, n) => gh(`repos/${repo}/pulls/${integer(n)}`);
 const runUrl = task => `https://github.com/${task.repo}/actions/runs/${task.run_id}`;
@@ -446,58 +444,48 @@ async function publishReview(task, result) {
 }
 export function issuePullRequestBody(task, result, commit) {
   const issue = integer(task.number);
-  const closesIssue = task.mode === 'issue' && result.outcome === 'issue_resolved';
-  const reference = closesIssue ? 'Closes' : 'Refs';
   const origin = marker({ kind: 'origin', issue, branch: task.branch, initial_sha: commit, run_id: task.run_id, ...(task.mode === 'issue' ? { issue_task: true } : {}) });
   const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance });
-  const link = `${reference} #${issue}`;
-  const issueReference = task.mode === 'issue' ? `${issueReferenceStart}\n\n${link}\n\n${issueReferenceEnd}` : link;
-  return `${origin}\n${issueReference}\n\n${description}`;
+  return `${origin}\nRefs #${issue}\n\n${description}`;
 }
 function managedIssueNumber(pr) {
   const origin = recordFrom(pr);
   return origin?.kind === 'origin' && origin.issue_task === true && Number.isSafeInteger(origin.issue) && origin.issue > 0 ? origin.issue : null;
 }
-export function managedIssueReference(pr) {
-  const number = managedIssueNumber(pr);
-  if (!number) return null;
-  const start = pr.body.indexOf(issueReferenceStart);
-  const end = pr.body.indexOf(issueReferenceEnd, start + issueReferenceStart.length);
-  if (start < 0 || end < 0) return null;
-  const contentStart = start + issueReferenceStart.length;
-  const content = pr.body.slice(contentStart, end);
-  if (/^[ \t]*(?:`{3,}|~{3,})/m.test(content)) return null;
-  const repositoryName = pr.base?.repo?.full_name?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const prefix = repositoryName ? `(?:${repositoryName})?` : '';
-  const pattern = new RegExp(`^[ \\t]{0,3}(refs|close[sd]?|fix(?:es|ed)?|resolve[sd]?)[ \\t]*:?[ \\t]+${prefix}#${number}(?![\\w])`, 'gim');
-  const matches = [...content.matchAll(pattern)];
-  if (matches.length > 1) throw new Error('The originating issue has multiple managed references');
-  if (!matches.length) return null;
-  const [match, keyword] = matches[0];
-  const unindented = match.trimStart();
-  return { number, closes: keyword.toLowerCase() !== 'refs', start: contentStart + matches[0].index + match.length - unindented.length, length: unindented.length };
+function graph(query, variables) {
+  const response = gh('graphql', { method: 'POST', body: { query, variables } });
+  if (!response.data || response.errors?.length) throw new Error('GitHub could not update or verify the closing issue link');
+  return response.data;
 }
-export function repairPullRequestBody(pr, confirmedIssue) {
-  const reference = managedIssueReference(pr);
-  if (!reference || reference.closes === (reference.number === confirmedIssue)) return pr.body;
-  const keyword = reference.number === confirmedIssue ? 'Closes' : 'Refs';
-  return pr.body.slice(0, reference.start) + `${keyword} #${reference.number}` + pr.body.slice(reference.start + reference.length);
+function closingIssueState(pr, issue) {
+  const { node } = graph(`query($id: ID!) { node(id: $id) { ... on PullRequest { state headRefOid
+    closingIssuesReferences(first: 100) { nodes { id } pageInfo { hasNextPage } } } } }`, { id: pr.node_id });
+  if (!node?.closingIssuesReferences || node.closingIssuesReferences.pageInfo.hasNextPage) throw new Error('Could not verify the PR closing issue links');
+  return { state: node.state, head: node.headRefOid, linked: node.closingIssuesReferences.nodes.some(item => item?.id === issue.node_id) };
 }
-async function checkIssueLink(task, pr, number, head, body, linked, previousBody) {
+function updateClosingIssue(pr, issue, linked) {
+  const operation = linked ? 'addCloseIssueReferences' : 'removeCloseIssueReferences';
+  const input = linked ? 'AddCloseIssueReferencesInput' : 'RemoveCloseIssueReferencesInput';
+  const response = graph(`mutation($input: ${input}!) { ${operation}(input: $input) { issue { id } } }`, {
+    input: { issueId: issue.node_id, pullRequestIds: [pr.node_id] },
+  });
+  if (response[operation]?.issue?.id !== issue.node_id) throw new Error('Could not update the originating issue closing link');
+}
+export async function syncClosingIssue(pr, issue, head, linked, previousHead = head) {
+  let originalLink;
   for (let attempt = 0; attempt <= 10; attempt++) {
-    const response = gh('graphql', { method: 'POST', body: {
-      query: `query($id: ID!) { node(id: $id) { ... on PullRequest { state headRefOid body
-        closingIssuesReferences(first: 100) { nodes { number repository { nameWithOwner } } } } } }`,
-      variables: { id: pr.node_id },
-    } });
-    const current = response.data?.node;
-    if (!current || response.errors?.length || !current.closingIssuesReferences) throw new Error('Could not verify GitHub issue closure for the repaired PR');
-    if (current.state !== 'OPEN' || current.headRefOid !== head || (current.body !== body && current.body !== previousBody)) return false;
-    const closesIssue = current.closingIssuesReferences.nodes.some(issue => issue.number === number && issue.repository.nameWithOwner === task.repo);
-    if (current.body === body && closesIssue === linked) return true;
+    const current = closingIssueState(pr, issue);
+    if (current.state !== 'OPEN' || ![head, previousHead].includes(current.head)) throw new Error('PR head changed while updating its closing issue link');
+    if (current.head === head) {
+      if (current.linked === linked) return originalLink ?? current.linked;
+      if (originalLink === undefined) {
+        originalLink = current.linked;
+        updateClosingIssue(pr, issue, linked);
+      }
+    }
     if (attempt < 10) await delay(1000);
   }
-  return false;
+  throw new Error('GitHub did not report the expected closing link. Check Development and any closing keywords in the PR description.');
 }
 async function publish(reviewOnly) {
   const task = json(taskFile);
@@ -545,16 +533,18 @@ async function publish(reviewOnly) {
   const commit = buildCommit(task, result);
   if (!commit) throw new Error('Codex reported changes but the validated patch was empty');
   sha(commit);
-  let repairPr, repairedBody, confirmedIssue;
+  let repairPr, repairIssue, expectedClosingLink;
   if (task.mode === 'repair') {
     const pr = prFor(task.repo, task.number), info = gh(`repos/${task.repo}/branches/${encodeURIComponent(task.branch)}`);
     if (pr.state !== 'open' || !sameRepository(pr, task.repo) || pr.head.sha !== task.head_sha || pr.head.ref !== task.branch || info.protected || task.branch === task.default_branch) throw new Error('PR head or branch protection changed; stale changes will not be pushed');
-    confirmedIssue = result.outcome === 'issue_resolved' ? task.context.closing_issue?.number : undefined;
-    if (result.outcome === 'issue_resolved' && (!confirmedIssue || managedIssueNumber(pr) !== confirmedIssue)) {
+    const issueNumber = managedIssueNumber(pr);
+    expectedClosingLink = result.outcome === 'issue_resolved';
+    if (expectedClosingLink && (!issueNumber || task.context.closing_issue?.number !== issueNumber)) {
       throw new Error('Issue resolution was reported without a matching managed issue reference');
     }
     repairPr = pr;
-    repairedBody = repairPullRequestBody(pr, confirmedIssue);
+    if (issueNumber) repairIssue = gh(`repos/${task.repo}/issues/${issueNumber}`);
+    if (expectedClosingLink && repairIssue.state !== 'open') expectedClosingLink = false;
   } else {
     const remote = command('git', ['ls-remote', `https://github.com/${task.repo}.git`, `refs/heads/${task.branch}`], {
       env: cleanEnvironment({ GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' }),
@@ -565,46 +555,27 @@ async function publish(reviewOnly) {
   comment(task.repo, task.number, task.record, message(task, task.mode === 'repair' ? task.repair_source === 'review' ? 'repair_review' : 'repair_ci' : 'issue_investigating',
     'The focused change is ready for safe publication.', { result, next: 'Publish the verified change.' }), task.comment_id);
   save(taskFile, task);
-  const repairEndpoint = `repos/${task.repo}/pulls/${task.number}`;
   // Remove stale closure before publishing an unconfirmed patch. A newly
   // confirmed closure can be added only after the confirming commit is live.
-  const repairIssue = repairPr && managedIssueNumber(repairPr);
-  if (repairIssue) {
-    const current = prFor(task.repo, task.number);
-    if (current.state !== 'open' || current.head.sha !== task.head_sha || managedIssueNumber(current) !== repairIssue) {
-      throw new Error('PR head or managed issue reference changed during repair');
-    }
-    repairPr = current;
-    repairedBody = repairPullRequestBody(current, confirmedIssue);
-  }
-  const downgrade = repairPr && !confirmedIssue && repairedBody !== repairPr.body;
-  if (downgrade) gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
+  let removedClosingLink = false;
   try {
-    if (repairIssue && !confirmedIssue && !await checkIssueLink(task, repairPr, repairIssue, task.head_sha, repairedBody, false, repairPr.body)) {
-      throw new Error('GitHub still links the originating issue for closure or the PR changed. Inspect the PR description before retrying the partial repair.');
+    if (repairIssue && !expectedClosingLink) {
+      removedClosingLink = await syncClosingIssue(repairPr, repairIssue, task.head_sha, false);
     }
     command('git', pushArguments(task, commit), { cwd: ROOT });
   } catch (error) {
-    if (downgrade) {
+    if (removedClosingLink) {
       const current = prFor(task.repo, task.number);
-      if (current.state === 'open' && current.head.sha === task.head_sha && current.body === repairedBody) {
-        gh(repairEndpoint, { method: 'PATCH', body: { body: repairPr.body } });
+      if (current.state === 'open' && current.head.sha === task.head_sha && managedIssueNumber(current) === repairIssue.number) {
+        await syncClosingIssue(current, repairIssue, task.head_sha, true);
       }
     }
     throw error;
   }
-  let referenceUpdatePending = Boolean(confirmedIssue && !managedIssueReference(repairPr));
-  if (confirmedIssue && repairedBody !== repairPr.body) {
-    referenceUpdatePending = true;
-    let current = prFor(task.repo, task.number);
-    for (let attempt = 0; attempt < 10 && current.state === 'open' && current.head.sha === task.head_sha && current.body === repairPr.body; attempt++) {
-      await delay(1000);
-      current = prFor(task.repo, task.number);
-    }
-    if (current.state === 'open' && current.head.sha === commit && current.body === repairPr.body) {
-      gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
-      referenceUpdatePending = !await checkIssueLink(task, repairPr, confirmedIssue, commit, repairedBody, true, repairPr.body);
-    }
+  let next = approvalGuidance;
+  if (repairIssue) {
+    try { await syncClosingIssue(repairPr, repairIssue, commit, expectedClosingLink, task.head_sha); }
+    catch { next = `Check the closing link for issue ${repairIssue.number} in the PR’s Development section before merging. ${approvalGuidance}`; }
   }
   if (task.mode === 'repair') reviewStatus({ ...task, head_sha: commit }, 'pending', 'Waiting for validation and independent review of this revision.');
   let prNumber = task.number;
@@ -616,12 +587,15 @@ async function publish(reviewOnly) {
       draft: false,
     } });
     prNumber = pr.number;
+    if (task.mode === 'issue' && result.outcome === 'issue_resolved' && issue.state === 'open') {
+      try { await syncClosingIssue(pr, issue, commit, true); }
+      catch { next = `Link issue ${issue.number} in the PR’s Development section before merging. ${approvalGuidance}`; }
+    }
     comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) },
-      message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next: approvalGuidance }), task.comment_id);
+      message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next }), task.comment_id);
   } else {
     comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) },
-      message(task, 'repair_pushed', result.summary, { result, commit, next: referenceUpdatePending ?
-        `Review the current PR head and description. The publisher could not safely add the closing reference for issue ${confirmedIssue}. ${approvalGuidance}` : approvalGuidance }), task.comment_id);
+      message(task, 'repair_pushed', result.summary, { result, commit, next }), task.comment_id);
   }
   output('pr', String(prNumber));
   output('head_sha', commit);
