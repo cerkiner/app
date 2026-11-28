@@ -131,7 +131,9 @@ export function validateResult(result, mode) {
   for (const [index, finding] of result.findings.entries()) {
     const error = `Invalid review finding ${index + 1}`;
     if (!finding || typeof finding !== 'object') throw new Error(`${error}: expected an object`);
-    if (!safeFile(finding.path)) throw new Error(`${error}: path must be a safe repository-relative file path`);
+    if (!safeFile(finding.path)) {
+      throw new Error(`${error}: path must be repository-relative, under 400 characters, with no empty, dot or dot-dot segments, ASCII control characters or backslashes`);
+    }
     if (!Number.isSafeInteger(finding.line) || finding.line < 1) throw new Error(`${error}: line must be a positive integer`);
     if (!['P0', 'P1', 'P2', 'P3'].includes(finding.priority)) throw new Error(`${error}: priority must be P0, P1, P2 or P3`);
     if (typeof finding.actionable !== 'boolean' || (finding.priority === 'P3' && finding.actionable)) {
