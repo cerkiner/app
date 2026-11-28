@@ -116,7 +116,7 @@ export function validateChanges(entries) {
   }
 }
 export function validateResult(result, mode) {
-  if (!result || !['changes', 'no_change', 'needs_info', 'external_failure', 'review'].includes(result.outcome) ||
+  if (!result || !['changes', 'issue_resolved', 'no_change', 'needs_info', 'external_failure', 'review'].includes(result.outcome) ||
       typeof result.summary !== 'string' || !Array.isArray(result.investigated) || !Array.isArray(result.tests) ||
       !Array.isArray(result.unresolved) || !Array.isArray(result.findings) || !Array.isArray(result.finding_verifications) ||
       !['complete', 'incomplete', 'not_applicable'].includes(result.review_status) || typeof result.title !== 'string') throw new Error('Invalid Codex result');
@@ -124,6 +124,7 @@ export function validateResult(result, mode) {
   if (mode === 'review' && result.review_status === 'incomplete' && !result.unresolved.length) throw new Error('Incomplete reviews must explain their limits');
   if (mode !== 'repair' && result.finding_verifications.length) throw new Error('Only repair verifies findings');
   if ((mode === 'review') !== (result.outcome === 'review')) throw new Error('Codex returned an outcome inconsistent with its task');
+  if (result.outcome === 'issue_resolved' && mode !== 'issue') throw new Error('Only an issue implementation can report issue_resolved');
   if (![result.investigated, result.unresolved].every(items => items.every(item => typeof item === 'string'))) throw new Error('Invalid Codex summary items');
   for (const test of result.tests) {
     if (typeof test.command !== 'string' || !['passed', 'failed', 'not_run'].includes(test.status) || typeof test.details !== 'string') throw new Error('Invalid test result');

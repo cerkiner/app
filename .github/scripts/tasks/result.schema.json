@@ -17,6 +17,7 @@
       "type": "string",
       "enum": [
         "changes",
+        "issue_resolved",
         "no_change",
         "needs_info",
         "external_failure",

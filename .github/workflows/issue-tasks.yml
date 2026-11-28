@@ -88,6 +88,12 @@ jobs:
             problems, report useful findings and concrete next actions instead of inventing
             a fix. The accepted publisher creates branches, commits, PRs and comments.
 
+            Use outcome issue_resolved only when the proposed patch fully addresses the
+            issue and no further implementation is needed. Use changes for a partial fix
+            or when completion is uncertain, and explain what remains in unresolved.
+            Report validation limits separately. The publisher links the issue for closure
+            on merge only for issue_resolved. Leave GitHub closing keywords to the publisher.
+
             The proposed project is the current working directory. Use native tools to read,
             search, edit and run appropriate checks within the selected permissions.
             Authentication, accepted execution settings and publication helpers are outside

@@ -434,6 +434,13 @@ async function publishReview(task, result) {
   if (result.review_status === 'incomplete') throw new Error('Independent review incomplete: ' + bounded(result.unresolved[0], 1200));
   if (needsRepair) recordReviewFindings({ target: task.number, head: task.head_sha, review_id: integer(created.id) });
 }
+export function issuePullRequestBody(task, result, commit) {
+  const issue = integer(task.number);
+  const reference = task.mode === 'issue' && result.outcome === 'issue_resolved' ? 'Closes' : 'Refs';
+  const origin = marker({ kind: 'origin', issue, branch: task.branch, initial_sha: commit, run_id: task.run_id });
+  const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance });
+  return `${origin}\n${reference} #${issue}\n\n${description}`;
+}
 async function publish(reviewOnly) {
   const task = json(taskFile);
   if ((task.mode === 'review') !== reviewOnly) throw new Error('Publication command does not match the prepared task');
@@ -460,7 +467,7 @@ async function publish(reviewOnly) {
       return;
     }
   }
-  if (result.outcome !== 'changes') {
+  if (!['changes', 'issue_resolved'].includes(result.outcome)) {
     const disputed = result.finding_verifications.length && result.finding_verifications.every(v => ['incorrect', 'not_reproduced', 'already_resolved'].includes(v.status));
     const status = task.mode === 'repair' ? result.finding_verifications.length ? 'complete' : 'halted' : result.outcome === 'external_failure' ? 'failed' : 'complete';
     comment(task.repo, task.number, { ...task.record, status, outcome: result.outcome, summary: bounded(result.summary, 1500) },
@@ -498,10 +505,9 @@ async function publish(reviewOnly) {
   let prNumber = task.number;
   if (['issue', 'deployment'].includes(task.mode)) {
     const issue = gh(`repos/${task.repo}/issues/${task.number}`);
-    const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance, extra: 'Refs #' + task.number });
     const pr = gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
       head: task.branch, base: task.default_branch, title: authoredTitle(result.title || issue.title),
-      body: marker({ kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id }) + '\n' + description,
+      body: issuePullRequestBody(task, result, commit),
       draft: false,
     } });
     prNumber = pr.number;
