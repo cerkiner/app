@@ -25,6 +25,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify_issue_link:
+    name: Verify native issue link permissions
+    if: github.event.pull_request.number == 70 && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - name: Verify linking an open test issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { gh } from './.github/scripts/tasks/lib.mjs';
+          import { syncClosingIssue } from './.github/scripts/tasks/tasks.mjs';
+          const repo = process.env.GH_REPO;
+          const pr = gh(`repos/${repo}/pulls/70`);
+          const issue = gh(`repos/${repo}/issues`, { method: 'POST', body: {
+            title: 'Verify automatic issue closing links',
+            body: 'Temporary verification for PR #70. The validation job closes this issue after testing the native link.',
+          } });
+          try {
+            assert.equal(issue.state, 'open');
+            assert.equal(await syncClosingIssue(pr, issue, pr.head.sha, false), false);
+            assert.equal(await syncClosingIssue(pr, issue, pr.head.sha, true), false);
+            assert.equal(gh(`repos/${repo}/issues/${issue.number}`).state, 'open');
+            console.log(`GitHub exposed a closing link for open issue ${issue.number} without closing it before merge.`);
+          } finally {
+            try { await syncClosingIssue(pr, issue, pr.head.sha, false); }
+            finally { gh(`repos/${repo}/issues/${issue.number}`, { method: 'PATCH', body: { state: 'closed', state_reason: 'completed' } }); }
+          }
+          console.log(`Removed the closing link and closed temporary issue ${issue.number}.`);
+          JS
   validate:
     name: Validate app
     runs-on: ubuntu-latest
