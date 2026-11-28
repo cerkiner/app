@@ -47,8 +47,10 @@ export function changedLines(files) {
 export function canonicalFindings(findings, previous = []) {
   const known = new Map(previous.map(f => [f.key, f]));
   const unique = new Map();
-  for (const finding of findings) {
-    if (finding.previous_key && (!known.has(finding.previous_key) || known.get(finding.previous_key).path !== finding.path)) throw new Error('Unknown previous finding reference');
+  for (const [index, finding] of findings.entries()) {
+    if (finding.previous_key && (!known.has(finding.previous_key) || known.get(finding.previous_key).path !== finding.path)) {
+      throw new Error(`Invalid review finding ${index + 1}: previous_key must match a supplied finding on the same path`);
+    }
     const key = finding.previous_key || findingKey(finding);
     unique.set(key, { ...finding, key });
   }
