@@ -194,7 +194,12 @@ async function prepare(kind) {
     let existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':' + task.branch)}&per_page=100`);
     if (!existing.length && task.mode === 'issue') existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':codex/issue-' + issue.number)}&per_page=100`);
     if (existing.length) {
-      comment(repo, issue.number, { kind: task.mode, source_run: task.target, source_attempt: task.source_attempt, status: 'complete', pr: existing[0].number, run_id: task.run_id }, message(task, 'issue_pr', 'This issue already has a prepared pull request.', { pr: existing[0].number, next: 'Continue review on the existing PR.' }));
+      const pr = existing[0];
+      const publication = history.findLast(record => record.kind === 'issue' && record.pr === pr.number && record.manages_issue_link === true);
+      const record = { kind: task.mode, source_run: task.target, source_attempt: task.source_attempt, status: 'complete', pr: pr.number, run_id: publication?.run_id || task.run_id,
+        ...(publication ? { manages_issue_link: true, closing_link_change: publication.closing_link_change } : {}) };
+      const next = record.closing_link_change ? 'Check the issue closing link in the existing PR’s Development section before merging.' : 'Continue review on the existing PR.';
+      comment(repo, issue.number, record, message(task, 'issue_pr', 'This issue already has a prepared pull request.', { pr: pr.number, next }));
       return;
     }
     if (task.deployment) task.context.deployment = task.deployment;
@@ -454,7 +459,7 @@ function managedIssueNumber(repo, pr) {
   if (!match) return null;
   const number = integer(match[1]);
   const origin = records(commentsFor(repo, number)).some(record => record.kind === 'issue' &&
-    record.status === 'complete' && record.pr === pr.number && record.manages_issue_link === true);
+    record.pr === pr.number && record.manages_issue_link === true);
   return origin ? number : null;
 }
 function graph(query, variables) {
@@ -476,7 +481,7 @@ function updateClosingIssue(pr, issue, linked) {
   });
   if (response[operation]?.issue?.id !== issue.node_id) throw new Error('Could not update the originating issue closing link');
 }
-export async function syncClosingIssue(pr, issue, head, linked, previousHead = head) {
+export async function syncClosingIssue(pr, issue, head, linked, previousHead = head, beforeMutation = () => {}) {
   let originalLink;
   try {
     for (let attempt = 0; attempt <= 10; attempt++) {
@@ -485,6 +490,7 @@ export async function syncClosingIssue(pr, issue, head, linked, previousHead = h
       if (current.head === head) {
         if (current.linked === linked) return originalLink ?? current.linked;
         if (originalLink === undefined) {
+          beforeMutation({ pr: pr.number, issue: issue.number, head, original: current.linked, desired: linked });
           originalLink = current.linked;
           updateClosingIssue(pr, issue, linked);
         }
@@ -494,12 +500,25 @@ export async function syncClosingIssue(pr, issue, head, linked, previousHead = h
     throw new Error('GitHub did not report the expected closing link. Check Development and any closing keywords in the PR description.');
   } catch (error) {
     if (originalLink !== undefined) {
-      const current = closingIssueState(pr, issue);
-      const shouldRestore = !originalLink || current.head === head;
-      if (current.state === 'OPEN' && shouldRestore) updateClosingIssue(pr, issue, originalLink);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const current = closingIssueState(pr, issue);
+          if (current.state === 'OPEN' && (!originalLink || current.head === head)) updateClosingIssue(pr, issue, originalLink);
+          break;
+        } catch {
+          if (attempt === 2) throw new Error('GitHub could not reconcile the interrupted closing link update. Check the pending link change recorded on the issue or PR.');
+          await delay(1000);
+        }
+      }
     }
     throw error;
   }
+}
+function recordClosingLinkChange(task, change) {
+  task.record.closing_link_change = change;
+  save(taskFile, task);
+  comment(task.repo, task.number, task.record, message(task, task.mode === 'repair' ? 'repair_ci' : 'issue_pr',
+    `Updating the merge-closing link for issue ${change.issue}.`, { pr: change.pr, next: 'Wait for publication or check Development if publication stops.' }), task.comment_id);
 }
 async function publish(reviewOnly) {
   const task = json(taskFile);
@@ -572,23 +591,29 @@ async function publish(reviewOnly) {
   // Remove stale closure before publishing an unconfirmed patch. A newly
   // confirmed closure can be added only after the confirming commit is live.
   let removedClosingLink = false;
+  const pendingLink = change => recordClosingLinkChange(task, change);
   try {
     if (repairIssue && !expectedClosingLink) {
-      removedClosingLink = await syncClosingIssue(repairPr, repairIssue, task.head_sha, false);
+      removedClosingLink = await syncClosingIssue(repairPr, repairIssue, task.head_sha, false, task.head_sha, pendingLink);
     }
     command('git', pushArguments(task, commit), { cwd: ROOT });
   } catch (error) {
     if (removedClosingLink) {
       const current = prFor(task.repo, task.number);
       if (current.state === 'open' && current.head.sha === task.head_sha && managedIssueNumber(task.repo, current) === repairIssue.number) {
-        await syncClosingIssue(current, repairIssue, task.head_sha, true);
+        await syncClosingIssue(current, repairIssue, task.head_sha, true, task.head_sha, pendingLink);
+        delete task.record.closing_link_change;
+        save(taskFile, task);
       }
     }
     throw error;
   }
   let next = approvalGuidance;
   if (repairIssue) {
-    try { await syncClosingIssue(repairPr, repairIssue, commit, expectedClosingLink, task.head_sha); }
+    try {
+      await syncClosingIssue(repairPr, repairIssue, commit, expectedClosingLink, task.head_sha, pendingLink);
+      delete task.record.closing_link_change;
+    }
     catch { next = `Check the closing link for issue ${repairIssue.number} in the PR’s Development section before merging. ${approvalGuidance}`; }
   }
   if (task.mode === 'repair') reviewStatus({ ...task, head_sha: commit }, 'pending', 'Waiting for validation and independent review of this revision.');
@@ -601,11 +626,21 @@ async function publish(reviewOnly) {
       draft: false,
     } });
     prNumber = pr.number;
+    if (task.mode === 'issue') {
+      task.record.pr = pr.number;
+      task.record.manages_issue_link = true;
+      save(taskFile, task);
+      comment(task.repo, task.number, task.record, message(task, 'issue_pr', result.summary,
+        { result, commit, pr: pr.number, next: 'Wait for the publisher to finish linking the issue.' }), task.comment_id);
+    }
     if (task.mode === 'issue' && result.outcome === 'issue_resolved' && issue.state === 'open') {
-      try { await syncClosingIssue(pr, issue, commit, true); }
+      try {
+        await syncClosingIssue(pr, issue, commit, true, commit, pendingLink);
+        delete task.record.closing_link_change;
+      }
       catch { next = `Link issue ${issue.number} in the PR’s Development section before merging. ${approvalGuidance}`; }
     }
-    comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, manages_issue_link: task.mode === 'issue', summary: bounded(result.summary, 1500) },
+    comment(task.repo, task.number, { ...task.record, status: 'complete', pr: pr.number, summary: bounded(result.summary, 1500) },
       message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next }), task.comment_id);
   } else {
     comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) },
