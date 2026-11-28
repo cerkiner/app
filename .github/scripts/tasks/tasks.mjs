@@ -1,6 +1,7 @@
 import { existsSync, rmSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
-import { ROOT, WORK, ARTIFACTS, CI_WORKFLOW, TASK_WORKFLOW, gh, pages, command, json, save,
+import { setTimeout as delay } from 'node:timers/promises';
+import { BOT, ROOT, WORK, ARTIFACTS, CI_WORKFLOW, TASK_WORKFLOW, gh, pages, command, json, save,
   output, integer, sha, repository, branch, bounded, records, recordFrom, marker, comment,
   publicText, authoredTitle, redactor, validateChanges, validateResult, cleanEnvironment } from './lib.mjs';
 import { repairBudget, humanRevisionAuthor, failureSignature, changedLines, canonicalFindings, actionableFindings,
@@ -192,8 +193,18 @@ async function prepare(kind) {
     task.branch = task.mode === 'deployment' ? `deployment-${task.target}-${task.source_attempt}` : `issue-${issue.number}`;
     let existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':' + task.branch)}&per_page=100`);
     if (!existing.length && task.mode === 'issue') existing = gh(`repos/${repo}/pulls?state=all&head=${encodeURIComponent(repo.split('/')[0] + ':codex/issue-' + issue.number)}&per_page=100`);
+    if (!existing.length && task.mode === 'issue') {
+      const publication = history.findLast(record => record.kind === 'issue' && record.manages_issue_link === true && !record.pr);
+      const recovered = publication && recoverPushedIssue(task, issue, publication);
+      if (recovered) existing = [recovered];
+    }
     if (existing.length) {
-      comment(repo, issue.number, { kind: task.mode, source_run: task.target, source_attempt: task.source_attempt, status: 'complete', pr: existing[0].number, run_id: task.run_id }, message(task, 'issue_pr', 'This issue already has a prepared pull request.', { pr: existing[0].number, next: 'Continue review on the existing PR.' }));
+      const pr = existing[0];
+      const publication = managedIssuePublication(repo, pr, history)?.record;
+      const record = { kind: task.mode, source_run: task.target, source_attempt: task.source_attempt, status: 'complete', pr: pr.number, run_id: publication?.run_id || task.run_id,
+        ...(publication ? { manages_issue_link: true, closes_issue: publication.closes_issue, output_sha: publication.output_sha } : {}) };
+      comment(repo, issue.number, record, message(task, 'issue_pr', 'This issue already has a prepared pull request.',
+        { pr: pr.number, next: 'Continue review on the existing PR.' }));
       return;
     }
     if (task.deployment) task.context.deployment = task.deployment;
@@ -205,9 +216,9 @@ async function prepare(kind) {
       const existingReview = reviews.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
       if (existingReview) {
         const record = publishedReview(existingReview, task.head_sha);
-        reviewStatus(task, reviewPasses(task, existingReview) ? 'success' : 'failure', 'Existing independent review and verified resolutions apply to this revision.');
         task.skip_reason = 'This revision already has a completed independent review.';
         save(taskFile, task);
+        await publishReviewedStatus(task, pr, reviewPasses(task, existingReview) ? 'success' : 'failure', 'Existing independent review and verified resolutions apply to this revision.');
         if (actionableFindings(record.findings).length) recordReviewFindings({ target: pr.number, head: task.head_sha, source: 'review', review_id: existingReview.id });
         return;
       }
@@ -239,6 +250,11 @@ async function prepare(kind) {
         jobs: jobs.map(job => ({ name: job.name, conclusion: job.conclusion, steps: (job.steps || []).map(step => ({ name: step.name, conclusion: step.conclusion })) })) };
     }
     if (task.mode === 'repair') {
+      const issueNumber = managedIssuePublication(repo, pr)?.number;
+      if (issueNumber) {
+        const sourceIssue = gh(`repos/${repo}/issues/${issueNumber}`);
+        task.context.closing_issue = { number: sourceIssue.number, title: bounded(sourceIssue.title, 500), body: bounded(sourceIssue.body, 16000) };
+      }
       const branchInfo = gh(`repos/${repo}/branches/${encodeURIComponent(task.branch)}`);
       if (task.branch === metadata.default_branch || branchInfo.protected) { notice(task, 'Automatic repair will not push to a protected or default branch.', 'repair-policy'); return; }
       let resetId = '';
@@ -362,6 +378,10 @@ function gitContext(task, root = ROOT, work = WORK) {
   const args = ['--git-dir', path.join(root, '.git'), '--work-tree', path.join(work, 'workspace'), '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null'];
   return (parameters, options = {}) => command('git', [...args, ...parameters], { cwd: path.join(work, 'workspace'), env, ...options });
 }
+export function withoutClosingKeywords(value) {
+  return value.replace(/\b(close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s*:?\s+((?:[\w.-]+\/[\w.-]+)?#\d+|https?:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+)/gi,
+    '$1 ($2)');
+}
 export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   const git = gitContext(task, root, work);
   git(['read-tree', task.head_sha]);
@@ -383,8 +403,9 @@ export function buildCommit(task, result, { root = ROOT, work = WORK } = {}) {
   if (Buffer.byteLength(diff) > 1024 * 1024) throw new Error('Patch exceeds 1 MiB limit');
   if (redactor()(diff) !== diff) throw new Error('Potential credential material found in patch; publishing blocked');
   const tree = git(['write-tree']).trim();
-  const subject = authoredTitle(result.title) || `Address ${task.mode} #${task.number}`;
-  const message = `${subject}\n\n${bounded(result.summary, 1800)}\n\nRefs #${task.number}\nRepository-Task: ${task.mode}\n${task.budget ? `Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
+  const subject = withoutClosingKeywords(authoredTitle(result.title)) || `Address ${task.mode} #${task.number}`;
+  const summary = withoutClosingKeywords(bounded(result.summary, 1800));
+  const message = `${subject}\n\n${summary}\n\nRefs #${task.number}\nRepository-Task: ${task.mode}\n${task.budget ? `Repair-Cycle: ${task.budget.cycle}\n` : ''}`;
   return git(['-c', 'commit.gpgsign=false', 'commit-tree', tree, '-p', task.head_sha], { input: message }).trim();
 }
 export function pushArguments(task, commit, remote = `https://github.com/${task.repo}.git`) {
@@ -399,7 +420,7 @@ async function publishReview(task, result) {
   const existing = prior.filter(r => publishedReview(r, task.head_sha)?.review_status === 'complete').at(-1);
   if (existing) {
     const record = publishedReview(existing, task.head_sha);
-    reviewStatus(task, reviewPasses(task, existing) ? 'success' : 'failure', 'Existing independent review and verified resolutions apply to this revision.');
+    await publishReviewedStatus(task, pr, reviewPasses(task, existing) ? 'success' : 'failure', 'Existing independent review and verified resolutions apply to this revision.');
     if (record && actionableFindings(record.findings).length) recordReviewFindings({ target: task.number, head: task.head_sha, source: 'review', review_id: existing.id });
     return;
   }
@@ -426,13 +447,110 @@ async function publishReview(task, result) {
     comments: inline.map(f => ({ path: f.path, line: f.line, side: 'RIGHT', body: renderFinding(f) })),
   } });
   const state = result.review_status === 'incomplete' ? 'failure' : needsRepair ? 'pending' : reviewPasses(task, created) ? 'success' : 'failure';
-  reviewStatus(task, state, {
+  await publishReviewedStatus(task, pr, state, {
     pending: 'Review findings are entering bounded repair.',
     success: 'Independent review completed with no unresolved material findings.',
     failure: 'Independent review is incomplete or has unresolved material findings.',
   }[state]);
   if (result.review_status === 'incomplete') throw new Error('Independent review incomplete: ' + bounded(result.unresolved[0], 1200));
   if (needsRepair) recordReviewFindings({ target: task.number, head: task.head_sha, review_id: integer(created.id) });
+}
+export function issuePullRequestBody(task, result, commit, summary = result?.summary) {
+  const issue = integer(task.number);
+  const origin = marker({ kind: 'origin', issue, branch: task.branch, initial_sha: commit, run_id: task.run_id });
+  const description = message(task, 'issue_pr', summary, { result, commit, next: approvalGuidance });
+  return `${origin}\nRefs #${issue}\n\n${description}`;
+}
+function recoverPushedIssue(task, issue, publication) {
+  let ref;
+  try { ref = gh(`repos/${task.repo}/git/ref/heads/${task.branch}`); }
+  catch (error) { if (error.httpStatus === 404) return null; throw error; }
+  if (ref.object.sha !== sha(publication.output_sha)) throw new Error('The existing issue branch does not match its accepted publication');
+  const originalTask = { ...task, run_id: publication.run_id };
+  return gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
+    head: task.branch, base: task.default_branch, title: withoutClosingKeywords(authoredTitle(publication.pr_title || issue.title)),
+    body: issuePullRequestBody(originalTask, null, publication.output_sha, publication.summary), draft: false,
+  } });
+}
+function managedIssuePublication(repo, pr, history) {
+  if (pr.user?.login !== BOT || pr.user.type !== 'Bot' || !sameRepository(pr, repo)) return null;
+  const match = /^issue-([1-9]\d{0,14})$/.exec(pr.head.ref);
+  if (!match) return null;
+  const number = integer(match[1]);
+  const accepted = (history || records(commentsFor(repo, number))).filter(entry => entry.kind === 'issue' && entry.manages_issue_link === true);
+  const origin = recordFrom(pr);
+  const validOrigin = origin?.kind === 'origin' && origin.issue === number && origin.branch === pr.head.ref;
+  let record = accepted.findLast(entry => entry.pr === pr.number || (!entry.pr &&
+    (entry.output_sha === pr.head.sha || (validOrigin && origin.run_id === entry.run_id && origin.initial_sha === entry.output_sha))));
+  if (!record && accepted.some(entry => !entry.pr)) {
+    const commits = new Set(pages(`repos/${repo}/pulls/${pr.number}/commits?per_page=100`).map(commit => commit.sha));
+    record = accepted.findLast(entry => !entry.pr && commits.has(entry.output_sha));
+  }
+  return record ? { number, record } : null;
+}
+function graph(query, variables) {
+  const response = gh('graphql', { method: 'POST', body: { query, variables } });
+  if (!response.data || response.errors?.length) throw new Error('GitHub could not update or verify the closing issue link');
+  return response.data;
+}
+function closingIssueState(pr, issue) {
+  const { node } = graph(`query($id: ID!) { node(id: $id) { ... on PullRequest { state headRefOid
+    closingIssuesReferences(first: 100) { nodes { id } pageInfo { hasNextPage } } } } }`, { id: pr.node_id });
+  if (!node?.closingIssuesReferences || node.closingIssuesReferences.pageInfo.hasNextPage) throw new Error('Could not verify the PR closing issue links');
+  return { state: node.state, head: node.headRefOid, linked: node.closingIssuesReferences.nodes.some(item => item?.id === issue.node_id) };
+}
+function updateClosingIssue(pr, issue, linked) {
+  const operation = linked ? 'addCloseIssueReferences' : 'removeCloseIssueReferences';
+  const input = linked ? 'AddCloseIssueReferencesInput' : 'RemoveCloseIssueReferencesInput';
+  const response = graph(`mutation($input: ${input}!) { ${operation}(input: $input) { issue { id } } }`, {
+    input: { issueId: issue.node_id, pullRequestIds: [pr.node_id] },
+  });
+  if (response[operation]?.issue?.id !== issue.node_id) throw new Error('Could not update the originating issue closing link');
+}
+export async function syncClosingIssue(pr, issue, head, linked) {
+  let originalLink;
+  try {
+    for (let attempt = 0; attempt <= 10; attempt++) {
+      const current = closingIssueState(pr, issue);
+      if (current.state !== 'OPEN' || current.head !== head) throw new Error('PR head changed while updating its closing issue link');
+      if (current.linked === linked) return originalLink ?? current.linked;
+      if (originalLink === undefined) {
+        originalLink = current.linked;
+        updateClosingIssue(pr, issue, linked);
+      }
+      if (attempt < 10) await delay(1000);
+    }
+    throw new Error('GitHub did not report the expected closing link. Check Development and any closing keywords in the PR description.');
+  } catch (error) {
+    if (originalLink !== undefined) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const current = closingIssueState(pr, issue);
+          if (current.state === 'OPEN' && (!originalLink || current.head === head)) updateClosingIssue(pr, issue, originalLink);
+          break;
+        } catch {
+          if (attempt === 2) throw new Error('GitHub could not reconcile the closing issue link. Retry independent review to verify the link before merging.');
+          await delay(1000);
+        }
+      }
+    }
+    throw error;
+  }
+}
+export async function publishReviewedStatus(task, pr, state, description) {
+  if (state === 'success') {
+    const origin = managedIssuePublication(task.repo, pr);
+    if (origin) {
+      const issue = gh(`repos/${task.repo}/issues/${origin.number}`);
+      const repair = records(commentsFor(task.repo, pr.number)).findLast(record => record.kind === 'repair' &&
+        record.output_sha === task.head_sha && typeof record.closes_issue === 'boolean');
+      // Publication intent belongs to its exact patch. A newer unconfirmed
+      // revision must not inherit permission to close the issue.
+      const closes = repair?.closes_issue ?? (origin.record.output_sha === task.head_sha && origin.record.closes_issue === true);
+      await syncClosingIssue(pr, issue, task.head_sha, closes);
+    }
+  }
+  reviewStatus(task, state, description);
 }
 async function publish(reviewOnly) {
   const task = json(taskFile);
@@ -460,7 +578,7 @@ async function publish(reviewOnly) {
       return;
     }
   }
-  if (result.outcome !== 'changes') {
+  if (!['changes', 'issue_resolved'].includes(result.outcome)) {
     const disputed = result.finding_verifications.length && result.finding_verifications.every(v => ['incorrect', 'not_reproduced', 'already_resolved'].includes(v.status));
     const status = task.mode === 'repair' ? result.finding_verifications.length ? 'complete' : 'halted' : result.outcome === 'external_failure' ? 'failed' : 'complete';
     comment(task.repo, task.number, { ...task.record, status, outcome: result.outcome, summary: bounded(result.summary, 1500) },
@@ -468,7 +586,8 @@ async function publish(reviewOnly) {
         next: disputed ? 'Review the explanation. This finding will not be retried in this cycle.' : task.mode === 'repair' ? 'Resolve the reported blocker before retrying.' : 'Follow the findings or provide the requested information.' }), task.comment_id);
     if (task.mode === 'repair') {
       const review = task.review_id && gh(`repos/${task.repo}/pulls/${task.number}/reviews/${task.review_id}`);
-      reviewStatus(task, review && reviewPasses(task, review, result.finding_verifications) ? 'success' : 'failure', 'Repair finished without a code change; see the verified findings and blockers.');
+      await publishReviewedStatus(task, prFor(task.repo, task.number), review && reviewPasses(task, review, result.finding_verifications) ? 'success' : 'failure',
+        'Repair finished without a code change; see the verified findings and blockers.');
     }
     return;
   }
@@ -483,6 +602,11 @@ async function publish(reviewOnly) {
   if (task.mode === 'repair') {
     const pr = prFor(task.repo, task.number), info = gh(`repos/${task.repo}/branches/${encodeURIComponent(task.branch)}`);
     if (pr.state !== 'open' || !sameRepository(pr, task.repo) || pr.head.sha !== task.head_sha || pr.head.ref !== task.branch || info.protected || task.branch === task.default_branch) throw new Error('PR head or branch protection changed; stale changes will not be pushed');
+    const issueNumber = managedIssuePublication(task.repo, pr)?.number;
+    if (result.outcome === 'issue_resolved' && (!issueNumber || task.context.closing_issue?.number !== issueNumber)) {
+      throw new Error('Issue resolution was reported without a matching managed issue reference');
+    }
+    if (issueNumber) task.record.closes_issue = result.outcome === 'issue_resolved';
   } else {
     const remote = command('git', ['ls-remote', `https://github.com/${task.repo}.git`, `refs/heads/${task.branch}`], {
       env: cleanEnvironment({ GH_TOKEN: process.env.GH_TOKEN, GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '', GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: '!gh auth git-credential' }),
@@ -490,6 +614,12 @@ async function publish(reviewOnly) {
     if (remote.trim()) throw new Error('Task branch already exists; human inspection is required before resuming');
   }
   task.record.output_sha = commit; task.record.status = 'publishing';
+  if (task.mode === 'issue') {
+    task.record.manages_issue_link = true;
+    task.record.closes_issue = result.outcome === 'issue_resolved';
+    task.record.pr_title = bounded(result.title, 240);
+    task.record.summary = bounded(result.summary, 1500);
+  }
   comment(task.repo, task.number, task.record, message(task, task.mode === 'repair' ? task.repair_source === 'review' ? 'repair_review' : 'repair_ci' : 'issue_investigating',
     'The focused change is ready for safe publication.', { result, next: 'Publish the verified change.' }), task.comment_id);
   save(taskFile, task);
@@ -498,10 +628,9 @@ async function publish(reviewOnly) {
   let prNumber = task.number;
   if (['issue', 'deployment'].includes(task.mode)) {
     const issue = gh(`repos/${task.repo}/issues/${task.number}`);
-    const description = message(task, 'issue_pr', result.summary, { result, commit, next: approvalGuidance, extra: 'Refs #' + task.number });
     const pr = gh(`repos/${task.repo}/pulls`, { method: 'POST', body: {
-      head: task.branch, base: task.default_branch, title: authoredTitle(result.title || issue.title),
-      body: marker({ kind: 'origin', issue: task.number, branch: task.branch, initial_sha: commit, run_id: task.run_id }) + '\n' + description,
+      head: task.branch, base: task.default_branch, title: withoutClosingKeywords(authoredTitle(result.title || issue.title)),
+      body: issuePullRequestBody(task, result, commit),
       draft: false,
     } });
     prNumber = pr.number;

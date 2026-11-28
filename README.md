@@ -85,9 +85,10 @@ diagnostics for seven days.
 The `PR checks` workflow runs `Validate app` on PRs targeting `master`, including
 documentation changes, and supports explicit diagnostic recovery runs.
 `App release` validates and deploys only production-relevant master pushes. New PR commits replace superseded runs. The repository's active
-`master` ruleset requires Validate app to pass against the current base branch.
-After the new review status is verified live, add Independent review to the same
-required checks. The ruleset requires a PR, blocks force pushes and deletion, and has no bypass
+`master` ruleset requires **Validate app** and **Independent review** to pass against
+the current base branch. Independent review checks the originating issue’s closing
+link for the reviewed revision before reporting success. The ruleset requires a PR,
+blocks force pushes and deletion, and has no bypass
 actors or required human approvals. These repository settings are managed in
 GitHub, separately from this workflow. Green means the defined checks passed;
 it does not cover other browser engines, native builds, or the WordPress theme.

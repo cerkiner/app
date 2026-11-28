@@ -150,6 +150,11 @@ jobs:
             finding needs code changes, return no_change or needs_info with your explanation.
             A mixed set may fix verified defects and explain disputed findings separately.
             Set review_status to not_applicable. Summarize changes and actual checks briefly.
+            If closing_issue is present, compare the entire repaired patch against the
+            supplied issue requirements. Use issue_resolved only when the revised patch
+            fully resolves that issue. Otherwise use changes for a valid patch and
+            explain remaining implementation or uncertainty in unresolved. Use changes
+            for all repairs without closing_issue.
 
             Never weaken tests, remove assertions, skip tests, disable security checks, alter
             automation or test configuration, or refactor unrelated code to make CI green.
@@ -334,6 +339,11 @@ jobs:
             finding needs code changes, return no_change or needs_info with your explanation.
             A mixed set may fix verified defects and explain disputed findings separately.
             Set review_status to not_applicable. Summarize changes and actual checks briefly.
+            If closing_issue is present, compare the entire repaired patch against the
+            supplied issue requirements. Use issue_resolved only when the revised patch
+            fully resolves that issue. Otherwise use changes for a valid patch and
+            explain remaining implementation or uncertainty in unresolved. Use changes
+            for all repairs without closing_issue.
 
             Never weaken tests, remove assertions, skip tests, disable security checks, alter
             automation or test configuration, or refactor unrelated code to make CI green.
