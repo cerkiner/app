@@ -124,7 +124,7 @@ export function validateResult(result, mode) {
   if (mode === 'review' && result.review_status === 'incomplete' && !result.unresolved.length) throw new Error('Incomplete reviews must explain their limits');
   if (mode !== 'repair' && result.finding_verifications.length) throw new Error('Only repair verifies findings');
   if ((mode === 'review') !== (result.outcome === 'review')) throw new Error('Codex returned an outcome inconsistent with its task');
-  if (result.outcome === 'issue_resolved' && mode !== 'issue') throw new Error('Only an issue implementation can report issue_resolved');
+  if (result.outcome === 'issue_resolved' && !['issue', 'repair'].includes(mode)) throw new Error('Only an issue implementation or repair can report issue_resolved');
   if (![result.investigated, result.unresolved].every(items => items.every(item => typeof item === 'string'))) throw new Error('Invalid Codex summary items');
   for (const test of result.tests) {
     if (typeof test.command !== 'string' || !['passed', 'failed', 'not_run'].includes(test.status) || typeof test.details !== 'string') throw new Error('Invalid test result');

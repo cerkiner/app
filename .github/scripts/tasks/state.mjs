@@ -70,8 +70,9 @@ export function validateRepairVerification(result, findings = []) {
   const expected = new Set(findings.map(f => f.key));
   if (result.finding_verifications.length !== expected.size || result.finding_verifications.some(v => !expected.has(v.finding_key))) throw new Error('Every targeted finding must be independently verified exactly once');
   const fixed = result.finding_verifications.filter(v => v.status === 'verified_fixed');
-  if (fixed.length && result.outcome !== 'changes') throw new Error('A verified fix must include changes');
-  if (findings.length && result.outcome === 'changes' && !fixed.length) throw new Error('No verified finding justifies the proposed repair');
+  const hasChanges = ['changes', 'issue_resolved'].includes(result.outcome);
+  if (fixed.length && !hasChanges) throw new Error('A verified fix must include changes');
+  if (findings.length && hasChanges && !fixed.length) throw new Error('No verified finding justifies the proposed repair');
   if (fixed.some(v => !documentationPath(findings.find(f => f.key === v.finding_key)?.path)) && !result.tests.some(t => t.status === 'passed' && /regression/i.test(t.command + ' ' + t.details))) throw new Error('Review repairs require a passing regression check');
 }
 
