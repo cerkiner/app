@@ -453,17 +453,20 @@ export function issuePullRequestBody(task, result, commit) {
 export function managedIssueReference(pr) {
   const origin = recordFrom(pr);
   if (origin?.kind !== 'origin' || origin.issue_task !== true || !Number.isSafeInteger(origin.issue) || origin.issue < 1) return null;
-  const pattern = new RegExp(`^([ \\t]{0,3})(refs|close[sd]?|fix(?:es|ed)?|resolve[sd]?)([ \\t]*:?[ \\t]+#${origin.issue}[ \\t]*)(?=\\r?$)`, 'gim');
+  const repositoryName = pr.base?.repo?.full_name?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const prefix = repositoryName ? `(?:${repositoryName})?` : '';
+  const pattern = new RegExp(`(?<![\\w/])(refs|close[sd]?|fix(?:es|ed)?|resolve[sd]?)[ \\t]*:?[ \\t]+${prefix}#${origin.issue}(?![\\w])`, 'gi');
   const matches = [...pr.body.matchAll(pattern)];
-  if (matches.length > 1) throw new Error('The originating issue has multiple managed reference lines');
+  if (matches.length > 1) throw new Error('The originating issue has multiple managed references');
   if (!matches.length) return null;
-  return { number: origin.issue, closes: matches[0][2].toLowerCase() !== 'refs', pattern };
+  const [match, keyword] = matches[0];
+  return { number: origin.issue, closes: keyword.toLowerCase() !== 'refs', start: matches[0].index, length: match.length };
 }
 export function repairPullRequestBody(pr, confirmedIssue) {
   const reference = managedIssueReference(pr);
   if (!reference || reference.closes === (reference.number === confirmedIssue)) return pr.body;
   const keyword = reference.number === confirmedIssue ? 'Closes' : 'Refs';
-  return pr.body.replace(reference.pattern, (_, padding) => `${padding}${keyword} #${reference.number}`);
+  return pr.body.slice(0, reference.start) + `${keyword} #${reference.number}` + pr.body.slice(reference.start + reference.length);
 }
 async function publish(reviewOnly) {
   const task = json(taskFile);
@@ -553,7 +556,9 @@ async function publish(reviewOnly) {
     }
     throw error;
   }
+  let referenceUpdatePending = false;
   if (confirmedIssue && repairedBody !== repairPr.body) {
+    referenceUpdatePending = true;
     let current = prFor(task.repo, task.number);
     for (let attempt = 0; attempt < 10 && current.state === 'open' && current.head.sha === task.head_sha && current.body === repairPr.body; attempt++) {
       await delay(1000);
@@ -561,7 +566,8 @@ async function publish(reviewOnly) {
     }
     if (current.state === 'open' && current.head.sha === commit && current.body === repairPr.body) {
       gh(repairEndpoint, { method: 'PATCH', body: { body: repairedBody } });
-    } else console.log('The confirmed issue reference was left unchanged because the PR head or body could not be verified.');
+      referenceUpdatePending = false;
+    }
   }
   if (task.mode === 'repair') reviewStatus({ ...task, head_sha: commit }, 'pending', 'Waiting for validation and independent review of this revision.');
   let prNumber = task.number;
@@ -577,7 +583,8 @@ async function publish(reviewOnly) {
       message(task, 'issue_pr', result.summary, { result, commit, pr: pr.number, next: approvalGuidance }), task.comment_id);
   } else {
     comment(task.repo, task.number, { ...task.record, status: 'complete', summary: bounded(result.summary, 1500) },
-      message(task, 'repair_pushed', result.summary, { result, commit, next: approvalGuidance }), task.comment_id);
+      message(task, 'repair_pushed', result.summary, { result, commit, next: referenceUpdatePending ?
+        `Review the current PR head and description. The publisher could not safely add the closing reference for issue ${confirmedIssue}. ${approvalGuidance}` : approvalGuidance }), task.comment_id);
   }
   output('pr', String(prNumber));
   output('head_sha', commit);
